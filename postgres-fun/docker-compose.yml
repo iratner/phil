@@ -1,0 +1,21 @@
+version: '3.4'
+
+services:
+  postgres:
+    image: postgres
+    restart: unless-stopped
+    volumes:
+      # map the named volume on the host machine to the location on the container where postgres stores its data files
+      - postgres:/var/lib/postgresql/data
+      # create a bind mount.  It maps a local script to a script on the container within a magic postgres direc looks for files to execute on the
+      # very first startup
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    environment:
+      - POSTGRES_USER=ilya
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - 5435:5432
+
+# Create a named volume that docker will store on the host machine in Docker's managed storage
+volumes:
+  postgres:

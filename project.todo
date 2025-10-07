@@ -1,0 +1,27 @@
+'Cmd/Ctrl+Enter' // Triggers `Todo: Toggle Box`
+'Alt+Enter' // Triggers `Todo: Toggle Box`
+'Alt+D' // Triggers `Todo: Toggle Done`
+'Alt+C' // Triggers `Todo: Toggle Cancelled`
+'Alt+S' // Triggers `Todo: Toggle Start`
+'Cmd/Ctrl+Shift+A' // Triggers  `Todo: Archive`
+
+Entities:
+Entities:
+  ☐ Define `Level` entity
+  ☐ Define `User` entity
+  ☐ Define `GameState` entity
+
+Game Mechanics:
+  Game Objects:
+    ☐ Define `Block` interface, should keep collision and movement interactions in mind
+      Block types are tracked with an enum
+      ☐ Define `ICE` block type and `Block` implementation
+      ☐ Define `SPIKE` block type and `Block` implementation
+      ☐ Define `BOUNCE` block type and `Block` implementation
+      ☐ Define `MOVE_ONE` block type and `Block` implementation
+      ☐ Define `STATIC` block type and `Block` implementation
+    ☐ Consider defining game rules in a json file so that they can be consumed by python and js and used to apply game mechanics accross different contexts
+  
+Level Creator Web App:
+
+
