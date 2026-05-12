@@ -65,14 +65,15 @@ jobs:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MIGRATION: When ready to release automatically on every merge to master
-# that touches webapps/armada/, replace the `on:` block above with:
+# that touches next-app-level-editor/ or phil-game/, replace the `on:` block above with:
 #
 # on:
 #   push:
 #     branches:
 #       - master
 #     paths:
-#       - 'webapps/armada/**'
+#       - 'next-app-level-editor/**'
+#       - 'phil-game//**'
 #
 # After enabling this, release-please will open/update a Release PR automatically.
 # The actual GitHub Release is only created when that Release PR is merged.
