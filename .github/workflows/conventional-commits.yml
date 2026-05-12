@@ -1,0 +1,91 @@
+name: Armada – Enforce Conventional Commits
+
+# Requires the PR to contain exactly one (non-merge) commit, and that commit's
+# subject to be a conventional commit.
+#
+# Why exactly one commit:
+#   The repo squash setting `squash_merge_commit_title = COMMIT_OR_PR_TITLE`
+#   uses the single source commit's subject as the master commit subject — but
+#   only when the PR has exactly one commit. With 2+ commits, GitHub falls back
+#   to the PR title, which we deliberately do not validate. Rejecting
+#   multi-commit PRs keeps the master subject sourced from a validated commit,
+#   which is what release-please reads to compute the version bump.
+#
+# To fix a failing PR: squash locally and force-push.
+#   git rebase -i master    # mark all but the first commit as `squash`
+#   git push --force-with-lease
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "phil-game/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-commit:
+    name: Validate single conventional commit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit count and subject
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?(!)?: .{1,}'
+
+          mapfile -t commits < <(git log "$BASE_SHA".."$HEAD_SHA" --no-merges --pretty=format:"%H%x09%s")
+          count=${#commits[@]}
+
+          echo "Commits in PR (excluding merges): $count"
+          for c in "${commits[@]}"; do
+            printf '  %s\n' "$c"
+          done
+          echo
+
+          if [ "$count" -ne 1 ]; then
+            echo "::error::PR has $count non-merge commits; this repo requires exactly one."
+            echo
+            echo "The master commit subject is sourced from the single source commit"
+            echo "(repo setting: squash_merge_commit_title=COMMIT_OR_PR_TITLE). With 2+"
+            echo "commits, GitHub falls back to the PR title, which this check does not"
+            echo "validate — so an unvalidated subject could leak onto master."
+            echo
+            echo "Squash locally and force-push:"
+            echo "  git rebase -i master    # mark all but the first commit as 'squash'"
+            echo "  git push --force-with-lease"
+            exit 1
+          fi
+
+          subject=$(printf '%s' "${commits[0]}" | cut -f2-)
+
+          if echo "$subject" | grep -qP "$PATTERN"; then
+            echo "✅ Conventional commit: $subject"
+          else
+            echo "::error::Commit subject is not a conventional commit."
+            echo "  Got: $subject"
+            echo
+            echo "Expected:"
+            echo "  <type>[optional scope]: <description>"
+            echo
+            echo "Examples:"
+            echo "  feat: add bulk order assignment"
+            echo "  fix(auth): handle expired session token"
+            echo "  build(bazel): upgrade buildifier to 8.x"
+            echo "  feat!: drop legacy API (breaking change)"
+            echo
+            echo "Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+            echo
+            echo "Only feat:, fix:, and BREAKING CHANGE / ! bump the version."
+            exit 1
+          fi

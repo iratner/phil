@@ -1,0 +1,61 @@
+name: Armada – Release Please
+
+on:
+  # Manual trigger while getting started. When ready to go automatic, see
+  # the migration note at the bottom of this file.
+  workflow_dispatch:
+
+permissions:
+  contents: write # Required: push version bump commits and CHANGELOG updates
+  pull-requests: write # Required: create/update the Release PR
+
+jobs:
+  release-please:
+    name: Run Release Please for Armada
+    runs-on: ubuntu-latest
+
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # GITHUB_TOKEN is sufficient for creating the Release PR and GitHub Release.
+          # If the Release PR merge needs to trigger another workflow (e.g. a deploy),
+          # swap this for a PAT or GitHub App token — GITHUB_TOKEN cannot trigger workflows.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Post-release steps — only run when release-please actually cut a release
+  # (i.e. when the Release PR was merged, not just when a Release PR was created/updated).
+  post-release:
+    name: Post-release steps
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Release created
+        run: |
+          echo "🎉 Released ${{ needs.release-please.outputs.tag_name }}"
+          echo "Add deploy steps, artifact uploads, Slack notifications, etc. here."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MIGRATION: When ready to release automatically on every merge to master
+# that touches webapps/armada/, replace the `on:` block above with:
+#
+# on:
+#   push:
+#     branches:
+#       - master
+#     paths:
+#       - 'webapps/armada/**'
+#
+# After enabling this, release-please will open/update a Release PR automatically.
+# The actual GitHub Release is only created when that Release PR is merged.
+# ─────────────────────────────────────────────────────────────────────────────
