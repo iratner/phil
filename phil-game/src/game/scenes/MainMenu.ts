@@ -18,7 +18,7 @@ export class MainMenu extends Scene {
       .text(512, 460, "Main Menu Boiiii", {
         fontFamily: "Arial Black",
         fontSize: 38,
-        color: "#ffffff",
+        color: "#fdffc0",
         stroke: "#000000",
         strokeThickness: 8,
         align: "center",
