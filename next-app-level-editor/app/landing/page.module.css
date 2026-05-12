@@ -4,7 +4,7 @@
   --gray-alpha-100: rgba(var(--gray-rgb), 0.05);
 
   --button-primary-hover: #383838;
-  --button-secondary-hover: #f2f2f2;
+  --button-secondary-hover: #c7dff4;
 
   display: grid;
   grid-template-rows: 20px 1fr 20px;
