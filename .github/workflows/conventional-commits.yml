@@ -14,14 +14,18 @@ name: Enforce Conventional Commits
 # To fix a failing PR: squash locally and force-push.
 #   git rebase -i master    # mark all but the first commit as `squash`
 #   git push --force-with-lease
+#
+# This workflow runs on every PR to `main` (no `paths:` filter on the trigger)
+# so it can be marked as a required status check in branch protection. The
+# path-scoping is done inside the job: if the PR touches none of the watched
+# paths, the validation step is skipped and the job reports success. A
+# `paths:` filter on the trigger would prevent the workflow from running at
+# all on out-of-scope PRs, leaving any required check unsatisfied forever.
 
 on:
   pull_request:
     branches:
       - main
-    paths:
-      - "phil-game/**"
-      - "next-app-level-editor/**"
 
 permissions:
   contents: read
@@ -36,7 +40,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Detect changes in watched paths
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Paths whose changes require a single conventional commit.
+          # Keep in sync with the release-please scopes.
+          WATCHED='^(phil-game|next-app-level-editor)/'
+
+          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -qE "$WATCHED"; then
+            echo "Watched paths touched — will run validation."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No watched paths touched — skipping validation (reporting success)."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check commit count and subject
+        if: steps.filter.outputs.changed == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
