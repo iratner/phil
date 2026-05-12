@@ -1,4 +1,4 @@
-name: Armada – Release Please
+name: Release Please
 
 on:
   # Manual trigger while getting started. When ready to go automatic, see
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release-please:
-    name: Run Release Please for Armada
+    name: Run Release Please
     runs-on: ubuntu-latest
 
     outputs:
@@ -20,16 +20,34 @@ jobs:
       version: ${{ steps.release.outputs.version }}
 
     steps:
+      # Mint an installation token from a GitHub App so the Release PR is
+      # attributed to the app (not `github-actions[bot]`). PRs and pushes made
+      # with `GITHUB_TOKEN` do NOT trigger other workflows — using an app token
+      # is what lets `conventional-commits.yml` (and any tag-triggered release
+      # workflow) actually run against release-please's outputs.
+      #
+      # Required repo secrets:
+      #   RELEASE_PLEASE_APP_ID          — numeric App ID
+      #   RELEASE_PLEASE_APP_PRIVATE_KEY — full contents of the App's .pem private key
+      #
+      # The App must be installed on this repo with these repository permissions:
+      #   Contents: read & write      (push version-bump commit + tags)
+      #   Pull requests: read & write (create/update the Release PR)
+      #   Issues: read & write        (release notes)
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
+
       - name: Run release-please
         id: release
         uses: googleapis/release-please-action@v4
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          # GITHUB_TOKEN is sufficient for creating the Release PR and GitHub Release.
-          # If the Release PR merge needs to trigger another workflow (e.g. a deploy),
-          # swap this for a PAT or GitHub App token — GITHUB_TOKEN cannot trigger workflows.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
   # Post-release steps — only run when release-please actually cut a release
   # (i.e. when the Release PR was merged, not just when a Release PR was created/updated).
