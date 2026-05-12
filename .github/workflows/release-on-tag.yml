@@ -1,0 +1,39 @@
+name: Armada – Release on Tag
+
+# DISABLED: Uncomment the push.tags trigger below when you're ready for tag-based releases.
+# Tags are created automatically by release-please when the Release PR is merged.
+# Tag format: webapps/armada/v1.2.3  (set by include-component-in-tag + tag-separator)
+#
+# Typical uses for this workflow: build production bundle, upload artifacts to the
+# GitHub Release, deploy to staging/production, notify Slack.
+
+on:
+  # push:
+  #   tags:
+  #     - 'webapps/armada/v[0-9]+.[0-9]+.[0-9]+'
+
+  # Placeholder trigger so this file can exist without doing anything yet
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Scaffolded for future tag-based releases — no-op for now"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  placeholder:
+    name: Tag-based release (not yet active)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: |
+          echo "This workflow will run post-release steps when a webapps/armada/v* tag is pushed."
+          echo "Uncomment the 'on.push.tags' trigger above when ready."
+          echo ""
+          echo "Typical steps to add here:"
+          echo "  - Build production Armada bundle"
+          echo "  - Upload artifacts to the GitHub Release"
+          echo "  - Deploy to staging or production"
+          echo "  - Notify Slack / teams"
