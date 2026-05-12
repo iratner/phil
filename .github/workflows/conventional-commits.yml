@@ -21,6 +21,7 @@ on:
       - main
     paths:
       - "phil-game/**"
+      - "next-app-level-editor/**"
 
 permissions:
   contents: read
