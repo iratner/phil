@@ -1,4 +1,4 @@
-name: Armada – Enforce Conventional Commits
+name: Enforce Conventional Commits
 
 # Requires the PR to contain exactly one (non-merge) commit, and that commit's
 # subject to be a conventional commit.
