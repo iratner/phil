@@ -3,12 +3,12 @@ name: Release on Tag
 # Fires automatically when release-please pushes a tag, which happens on
 # release-please's second run (after the Release PR is merged).
 #
-# Tag pattern is plain `v1.2.3` because release-please-config.json declares
-# a single package at "." without `include-component-in-tag`. If you later
-# split into per-component releases (e.g. one for phil-game/, one for
-# next-app-level-editor/), update the pattern accordingly:
-#   - 'phil-game/v[0-9]+.[0-9]+.[0-9]+'
-#   - 'next-app-level-editor/v[0-9]+.[0-9]+.[0-9]+'
+# release-please-config.json declares multiple packages (`phil-game` and
+# `next-app-level-editor`, the latter aliased to `level-editor` via
+# `package-name`), so release-please runs in manifest/multi-component mode
+# and prefixes tags with the component name and a `-` separator — e.g.
+# `phil-game-v1.2.0`, `level-editor-v1.2.0`. The patterns below match that
+# scheme. If you ever add a third component, add its tag pattern here too.
 #
 # IMPORTANT: this only fires automatically because release-please uses a
 # GitHub App token to push the tag. If you revert release-please to
@@ -17,7 +17,8 @@ name: Release on Tag
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - "phil-game-v[0-9]+.[0-9]+.[0-9]+"
+      - "level-editor-v[0-9]+.[0-9]+.[0-9]+"
 
   # Manual trigger for retrying a tag-based run without re-pushing the tag.
   workflow_dispatch:
