@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/iratner/phil/compare/v1.1.0...v1.2.0) (2026-05-13)
+
+
+### Features
+
+* more better colors the feature ([5e61074](https://github.com/iratner/phil/commit/5e610743efcb238732cac4d8d5e181d29c2b047c))
+
+
+### Bug Fixes
+
+* more better colors ([#14](https://github.com/iratner/phil/issues/14)) ([5e61074](https://github.com/iratner/phil/commit/5e610743efcb238732cac4d8d5e181d29c2b047c))
+
 ## [1.1.0](https://github.com/iratner/phil/compare/v1.0.0...v1.1.0) (2026-05-13)
 
 
