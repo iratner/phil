@@ -19,7 +19,7 @@ export class MainMenu extends Scene {
         fontFamily: "Arial Black",
         fontSize: 38,
         color: "#fdffc0",
-        stroke: "#000000",
+        stroke: "#8b019b",
         strokeThickness: 8,
         align: "center",
       })
