@@ -1,39 +1,46 @@
-name: Armada – Release on Tag
+name: Release on Tag
 
-# DISABLED: Uncomment the push.tags trigger below when you're ready for tag-based releases.
-# Tags are created automatically by release-please when the Release PR is merged.
-# Tag format: webapps/armada/v1.2.3  (set by include-component-in-tag + tag-separator)
+# Fires automatically when release-please pushes a tag, which happens on
+# release-please's second run (after the Release PR is merged).
 #
-# Typical uses for this workflow: build production bundle, upload artifacts to the
-# GitHub Release, deploy to staging/production, notify Slack.
+# Tag pattern is plain `v1.2.3` because release-please-config.json declares
+# a single package at "." without `include-component-in-tag`. If you later
+# split into per-component releases (e.g. one for phil-game/, one for
+# next-app-level-editor/), update the pattern accordingly:
+#   - 'phil-game/v[0-9]+.[0-9]+.[0-9]+'
+#   - 'next-app-level-editor/v[0-9]+.[0-9]+.[0-9]+'
+#
+# IMPORTANT: this only fires automatically because release-please uses a
+# GitHub App token to push the tag. If you revert release-please to
+# `secrets.GITHUB_TOKEN`, tag pushes will stop triggering workflows.
 
 on:
-  # push:
-  #   tags:
-  #     - 'webapps/armada/v[0-9]+.[0-9]+.[0-9]+'
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
-  # Placeholder trigger so this file can exist without doing anything yet
+  # Manual trigger for retrying a tag-based run without re-pushing the tag.
   workflow_dispatch:
     inputs:
       reason:
-        description: "Scaffolded for future tag-based releases — no-op for now"
+        description: "Reason for manual run (optional)"
         required: false
 
 permissions:
   contents: read
 
 jobs:
-  placeholder:
-    name: Tag-based release (not yet active)
+  release:
+    name: Tag-based release
     runs-on: ubuntu-latest
     steps:
-      - name: Placeholder
+      - name: Show triggering ref
         run: |
-          echo "This workflow will run post-release steps when a webapps/armada/v* tag is pushed."
-          echo "Uncomment the 'on.push.tags' trigger above when ready."
+          echo "Triggered by: $GITHUB_REF"
+          echo "Tag: ${GITHUB_REF#refs/tags/}"
           echo ""
-          echo "Typical steps to add here:"
-          echo "  - Build production Armada bundle"
+          echo "Add real release steps here:"
+          echo "  - Build production bundle"
           echo "  - Upload artifacts to the GitHub Release"
           echo "  - Deploy to staging or production"
           echo "  - Notify Slack / teams"
