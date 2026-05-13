@@ -3,7 +3,7 @@
   --gray-alpha-200: rgba(var(--gray-rgb), 0.08);
   --gray-alpha-100: rgba(var(--gray-rgb), 0.05);
 
-  --button-primary-hover: #383838;
+  --button-primary-hover: #2b00ac;
   --button-secondary-hover: #c7dff4;
 
   display: grid;
