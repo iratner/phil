@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/iratner/phil/compare/v1.3.0...v1.3.1) (2026-05-13)
+
+
+### Bug Fixes
+
+* changelog was incorrectly defined in the config ([#21](https://github.com/iratner/phil/issues/21)) ([3352e20](https://github.com/iratner/phil/commit/3352e2066727a3e25a7515beabd28f7331022d5c))
+
 ## [1.3.0](https://github.com/iratner/phil/compare/v1.2.0...v1.3.0) (2026-05-13)
 
 
