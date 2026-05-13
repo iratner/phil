@@ -6,7 +6,8 @@
       "bump-minor-pre-major": false,
       "bump-patch-for-minor-pre-major": false,
       "draft": false,
-      "prerelease": false
+      "prerelease": false,
+      "package-name": "phil-game"
     },
     "next-app-level-editor": {
       "changelog-path": "CHANGELOG.md",
