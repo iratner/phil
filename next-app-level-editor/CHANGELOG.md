@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0](https://github.com/iratner/phil/compare/level-editor-v1.4.0...level-editor-v1.5.0) (2026-05-13)
+
+
+### Features
+
+* **leveler:** buno colors here ([49ca6c3](https://github.com/iratner/phil/commit/49ca6c361e524235824fd357ce2f654a42ac75a1))
+
+
+### Bug Fixes
+
+* **phil-game:** no bueno colors here ([#26](https://github.com/iratner/phil/issues/26)) ([49ca6c3](https://github.com/iratner/phil/commit/49ca6c361e524235824fd357ce2f654a42ac75a1))
+
 ## [1.4.0](https://github.com/iratner/phil/compare/level-editor-v1.3.1...level-editor-v1.4.0) (2026-05-13)
 
 
