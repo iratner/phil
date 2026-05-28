@@ -24,7 +24,7 @@ export class Game extends Scene {
         fontFamily: "Arial Black",
         fontSize: 38,
         color: "#ffffff",
-        stroke: "#110000",
+        stroke: "#000000",
         strokeThickness: 8,
         align: "center",
       },
