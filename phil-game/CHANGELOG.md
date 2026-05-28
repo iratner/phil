@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0](https://github.com/iratner/phil/compare/phil-game-v1.5.0...phil-game-v1.6.0) (2026-05-28)
+
+
+### Features
+
+* also broke nothing ([e97760f](https://github.com/iratner/phil/commit/e97760ffa2162653b521522af952505b70964f1e))
+
+
+### Bug Fixes
+
+* changed some colors ([#30](https://github.com/iratner/phil/issues/30)) ([e97760f](https://github.com/iratner/phil/commit/e97760ffa2162653b521522af952505b70964f1e))
+* updated some colors \ fix: this and that \ feat: also made no discernible differences ([#29](https://github.com/iratner/phil/issues/29)) ([541beda](https://github.com/iratner/phil/commit/541beda444e6ac6d2e455b00a0fd1be676d53ba9))
+
 ## [1.5.0](https://github.com/iratner/phil/compare/phil-game-v1.4.0...phil-game-v1.5.0) (2026-05-13)
 
 
