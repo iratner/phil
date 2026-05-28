@@ -1,19 +1,19 @@
 name: Enforce Conventional Commits
 
-# Requires the PR to contain exactly one (non-merge) commit, and that commit's
-# subject to be a conventional commit.
+# Validates that the PR *title* is a conventional commit.
 #
-# Why exactly one commit:
-#   The repo squash setting `squash_merge_commit_title = COMMIT_OR_PR_TITLE`
-#   uses the single source commit's subject as the master commit subject — but
-#   only when the PR has exactly one commit. With 2+ commits, GitHub falls back
-#   to the PR title, which we deliberately do not validate. Rejecting
-#   multi-commit PRs keeps the master subject sourced from a validated commit,
-#   which is what release-please reads to compute the version bump.
+# Why the PR title (not the commits):
+#   The repo squash setting `squash_merge_commit_title = PR_TITLE` (GitHub UI:
+#   "Pull request title and commit details") always uses the PR title as the
+#   squash commit's subject on `main`, regardless of how many commits the PR
+#   has. That squash subject is what release-please reads to compute the
+#   version bump — so the PR title is the thing that must be a valid
+#   conventional commit. Individual commit subjects are irrelevant here, and
+#   there is no longer any reason to require a single commit per PR.
 #
-# To fix a failing PR: squash locally and force-push.
-#   git rebase -i master    # mark all but the first commit as `squash`
-#   git push --force-with-lease
+#   (Before the squash setting was PR_TITLE this workflow enforced a single
+#   conventional *commit* per PR. That obsolete version is preserved at
+#   conventional-commits.yml.deprecated for reference.)
 #
 # This workflow runs on every PR to `main` (no `paths:` filter on the trigger)
 # so it can be marked as a required status check in branch protection. The
@@ -21,9 +21,14 @@ name: Enforce Conventional Commits
 # paths, the validation step is skipped and the job reports success. A
 # `paths:` filter on the trigger would prevent the workflow from running at
 # all on out-of-scope PRs, leaving any required check unsatisfied forever.
+#
+# `edited` is in the trigger types so that fixing a bad PR title re-runs the
+# check — editing a title does not push a commit, so without `edited` the only
+# other way to re-trigger would be to push.
 
 on:
   pull_request:
+    types: [opened, edited, synchronize, reopened]
     branches:
       - main
 
@@ -32,7 +37,7 @@ permissions:
 
 jobs:
   validate-commit:
-    name: Validate single conventional commit
+    name: Validate conventional PR title
     runs-on: ubuntu-latest
 
     steps:
@@ -48,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Paths whose changes require a single conventional commit.
+          # Paths whose changes require a conventional PR title.
           # Keep in sync with the release-please scopes.
           WATCHED='^(phil-game|next-app-level-editor)/'
 
@@ -60,46 +65,30 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check commit count and subject
+      - name: Check PR title
         if: steps.filter.outputs.changed == 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Pass via env (never interpolate ${{ }} straight into the script) so
+          # a crafted PR title can't inject shell.
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           set -euo pipefail
 
           PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?(!)?: .{1,}'
 
-          mapfile -t commits < <(git log "$BASE_SHA".."$HEAD_SHA" --no-merges --pretty=format:"%H%x09%s")
-          count=${#commits[@]}
-
-          echo "Commits in PR (excluding merges): $count"
-          for c in "${commits[@]}"; do
-            printf '  %s\n' "$c"
-          done
+          echo "PR title: $PR_TITLE"
           echo
 
-          if [ "$count" -ne 1 ]; then
-            echo "::error::PR has $count non-merge commits; this repo requires exactly one."
-            echo
-            echo "The master commit subject is sourced from the single source commit"
-            echo "(repo setting: squash_merge_commit_title=COMMIT_OR_PR_TITLE). With 2+"
-            echo "commits, GitHub falls back to the PR title, which this check does not"
-            echo "validate — so an unvalidated subject could leak onto master."
-            echo
-            echo "Squash locally and force-push:"
-            echo "  git rebase -i master    # mark all but the first commit as 'squash'"
-            echo "  git push --force-with-lease"
-            exit 1
-          fi
-
-          subject=$(printf '%s' "${commits[0]}" | cut -f2-)
-
-          if echo "$subject" | grep -qP "$PATTERN"; then
-            echo "✅ Conventional commit: $subject"
+          if printf '%s' "$PR_TITLE" | grep -qP "$PATTERN"; then
+            echo "✅ Conventional commit: $PR_TITLE"
           else
-            echo "::error::Commit subject is not a conventional commit."
-            echo "  Got: $subject"
+            echo "::error::PR title is not a conventional commit."
+            echo "  Got: $PR_TITLE"
+            echo
+            echo "The PR title becomes the squash commit subject on main"
+            echo "(repo setting: squash_merge_commit_title=PR_TITLE) and is what"
+            echo "release-please reads to compute the version bump, so it must be"
+            echo "a conventional commit."
             echo
             echo "Expected:"
             echo "  <type>[optional scope]: <description>"
