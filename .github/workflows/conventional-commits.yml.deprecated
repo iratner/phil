@@ -1,0 +1,139 @@
+# ⚠️ DEPRECATED — DO NOT USE. Preserved for reference only.
+#
+# This file is intentionally named `.yml.deprecated` (not `.yml`) so GitHub
+# Actions does NOT pick it up — GitHub only runs `*.yml` / `*.yaml` files
+# placed directly in `.github/workflows/`.
+#
+# What it used to do:
+#   Enforced that a PR touching watched paths contained exactly ONE non-merge
+#   commit whose subject was a conventional commit.
+#
+# Why it was retired:
+#   It only made sense under `squash_merge_commit_title = COMMIT_OR_PR_TITLE`,
+#   where GitHub uses the single source commit's subject as the squash subject
+#   ONLY when there is exactly one commit (falling back to the unvalidated PR
+#   title with 2+). The repo squash setting was changed to "Pull request title
+#   and commit details" (`squash_merge_commit_title = PR_TITLE`), which always
+#   uses the PR title as the squash subject. The single-commit rule is no
+#   longer needed; the live workflow now validates the PR title instead.
+#
+# Live version: .github/workflows/conventional-commits.yml
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Enforce Conventional Commits
+
+# Requires the PR to contain exactly one (non-merge) commit, and that commit's
+# subject to be a conventional commit.
+#
+# Why exactly one commit:
+#   The repo squash setting `squash_merge_commit_title = COMMIT_OR_PR_TITLE`
+#   uses the single source commit's subject as the master commit subject — but
+#   only when the PR has exactly one commit. With 2+ commits, GitHub falls back
+#   to the PR title, which we deliberately do not validate. Rejecting
+#   multi-commit PRs keeps the master subject sourced from a validated commit,
+#   which is what release-please reads to compute the version bump.
+#
+# To fix a failing PR: squash locally and force-push.
+#   git rebase -i master    # mark all but the first commit as `squash`
+#   git push --force-with-lease
+#
+# This workflow runs on every PR to `main` (no `paths:` filter on the trigger)
+# so it can be marked as a required status check in branch protection. The
+# path-scoping is done inside the job: if the PR touches none of the watched
+# paths, the validation step is skipped and the job reports success. A
+# `paths:` filter on the trigger would prevent the workflow from running at
+# all on out-of-scope PRs, leaving any required check unsatisfied forever.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate-commit:
+    name: Validate single conventional commit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes in watched paths
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Paths whose changes require a single conventional commit.
+          # Keep in sync with the release-please scopes.
+          WATCHED='^(phil-game|next-app-level-editor)/'
+
+          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -qE "$WATCHED"; then
+            echo "Watched paths touched — will run validation."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No watched paths touched — skipping validation (reporting success)."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check commit count and subject
+        if: steps.filter.outputs.changed == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?(!)?: .{1,}'
+
+          mapfile -t commits < <(git log "$BASE_SHA".."$HEAD_SHA" --no-merges --pretty=format:"%H%x09%s")
+          count=${#commits[@]}
+
+          echo "Commits in PR (excluding merges): $count"
+          for c in "${commits[@]}"; do
+            printf '  %s\n' "$c"
+          done
+          echo
+
+          if [ "$count" -ne 1 ]; then
+            echo "::error::PR has $count non-merge commits; this repo requires exactly one."
+            echo
+            echo "The master commit subject is sourced from the single source commit"
+            echo "(repo setting: squash_merge_commit_title=COMMIT_OR_PR_TITLE). With 2+"
+            echo "commits, GitHub falls back to the PR title, which this check does not"
+            echo "validate — so an unvalidated subject could leak onto master."
+            echo
+            echo "Squash locally and force-push:"
+            echo "  git rebase -i master    # mark all but the first commit as 'squash'"
+            echo "  git push --force-with-lease"
+            exit 1
+          fi
+
+          subject=$(printf '%s' "${commits[0]}" | cut -f2-)
+
+          if echo "$subject" | grep -qP "$PATTERN"; then
+            echo "✅ Conventional commit: $subject"
+          else
+            echo "::error::Commit subject is not a conventional commit."
+            echo "  Got: $subject"
+            echo
+            echo "Expected:"
+            echo "  <type>[optional scope]: <description>"
+            echo
+            echo "Examples:"
+            echo "  feat: add bulk order assignment"
+            echo "  fix(auth): handle expired session token"
+            echo "  build(bazel): upgrade buildifier to 8.x"
+            echo "  feat!: drop legacy API (breaking change)"
+            echo
+            echo "Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+            echo
+            echo "Only feat:, fix:, and BREAKING CHANGE / ! bump the version."
+            exit 1
+          fi
