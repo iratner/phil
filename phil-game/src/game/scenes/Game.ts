@@ -11,7 +11,7 @@ export class Game extends Scene {
 
   create() {
     this.camera = this.cameras.main;
-    this.camera.setBackgroundColor(0xffff00);
+    this.camera.setBackgroundColor(0xeeff00);
 
     this.background = this.add.image(512, 384, "background");
     this.background.setAlpha(0.5);
@@ -24,7 +24,7 @@ export class Game extends Scene {
         fontFamily: "Arial Black",
         fontSize: 38,
         color: "#ffffff",
-        stroke: "#000000",
+        stroke: "#110000",
         strokeThickness: 8,
         align: "center",
       },
