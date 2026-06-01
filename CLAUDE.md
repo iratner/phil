@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+@.claude/react-formatting.md
+
 ## Repository layout
 
 This is a multi-project workspace (not a Bazel/Turborepo monorepo — each project has its own `package.json` / `requirements.txt` and is built independently) for the **phil** game. The pieces:
