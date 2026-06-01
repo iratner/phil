@@ -50,7 +50,7 @@ jobs:
 
           # Paths whose changes require a single conventional commit.
           # Keep in sync with the release-please scopes.
-          WATCHED='^(phil-game|next-app-level-editor)/'
+          WATCHED='^(phil-game|level-editor)/'
 
           if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -qE "$WATCHED"; then
             echo "Watched paths touched — will run validation."

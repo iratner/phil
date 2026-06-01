@@ -1,18 +1,18 @@
 {
-    "name": "template-vite-ts",
+    "name": "phil-game",
     "description": "A Phaser 3 TypeScript template using Vite.",
     "version": "1.4.0",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/phaserjs/template-vite-ts.git"
+        "url": "git+https://github.com/iratner/phil-game.git"
     },
-    "author": "Phaser Studio <support@phaser.io> (https://phaser.io/)",
+    "author": "Your Name <your.email@example.com> (https://yourwebsite.com/)",
     "license": "MIT",
     "licenseUrl": "http://www.opensource.org/licenses/mit-license.php",
     "bugs": {
-        "url": "https://github.com/phaserjs/template-vite-ts/issues"
+        "url": "https://github.com/iratner/phil-game/issues"
     },
-    "homepage": "https://github.com/phaserjs/template-vite-ts#readme",
+    "homepage": "https://github.com/iratner/phil-game#readme",
     "scripts": {
         "dev": "node log.js dev & vite --config vite/config.dev.mjs",
         "build": "node log.js build & vite build --config vite/config.prod.mjs",
@@ -30,6 +30,5 @@
         "@capacitor/ios": "^7.4.3",
         "phaser": "4.0.0-rc.5",
         "terser": "^5.39.0"
-    },
-    "packageManager": "pnpm@10.8.0+sha512.0e82714d1b5b43c74610193cb20734897c1d00de89d0e18420aebc5977fa13d780a9cb05734624e81ebd81cc876cd464794850641c48b9544326b5622ca29971"
+    }
 }
