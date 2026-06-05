@@ -9,7 +9,7 @@
       "prerelease": false,
       "package-name": "phil-game"
     },
-    "next-app-level-editor": {
+    "level-editor": {
       "changelog-path": "CHANGELOG.md",
       "release-type": "simple",
       "bump-minor-pre-major": false,

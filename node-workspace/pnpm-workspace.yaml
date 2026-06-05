@@ -1,0 +1,9 @@
+packages:
+  - 'frontend/phil-game'
+  - 'frontend/level-editor'
+  - 'phil-server-nest'
+allowBuilds:
+  '@nestjs/core': true
+  esbuild: true
+  sharp: false
+  unrs-resolver: false
