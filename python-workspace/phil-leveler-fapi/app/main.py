@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import levels
+from .routers import levels, solver
 
 app = FastAPI()
 
@@ -17,3 +17,4 @@ app.add_middleware(
 )
 
 app.include_router(levels.router)
+app.include_router(solver.router)

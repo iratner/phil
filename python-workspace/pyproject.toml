@@ -1,0 +1,15 @@
+[project]
+name = "python-workspace"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12.0"
+dependencies = [
+    "fastapi[standard]>=0.128.0",
+    "uvicorn>=0.33.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
