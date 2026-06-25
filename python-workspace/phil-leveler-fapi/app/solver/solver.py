@@ -6,17 +6,21 @@ one step in a cardinal direction.  The level is won when a continuous
 orthogonal path of Phil-walkable cells connects the PHIL cell to the GOAL
 cell on the top layer (flood-fill check after every move).
 
-Scoring / points are **not** computed here — they are a live game mechanic
-only.  See `.claude/game-mechanics.md` at the repo root for the full rule
-reference used to build this module.
+Spikes are modelled as cubes with up to five independently spiked faces (UP,
+NORTH, SOUTH, EAST, WEST; the bottom face is never spiked).  A movable block
+that can destroy spikes removes the spikes from the single face it slides into;
+Phil cannot occupy a cell that sits against a still-spiked face.  See
+`.claude/game-mechanics.md` at the repo root for the full rule reference.
+
+Scoring / points are **not** computed here — they are a live game mechanic only.
 """
 
 from __future__ import annotations
 
 from collections import deque
-from typing import Optional
+from typing import NamedTuple, Optional, Sequence, Union
 
-from app.models.level import BlockType
+from app.models.level import BlockSpec, BlockType, Face
 
 # ---------------------------------------------------------------------------
 # Direction helpers
@@ -31,6 +35,31 @@ _DELTA: dict[str, tuple[int, int]] = {
     "right": (0, 1),
 }
 
+# When a block travels in a direction it strikes the spike face *opposite* to
+# its motion (a block moving right hits the spike's WEST face, and so on).
+_HIT_FACE: dict[str, Face] = {
+    "up": Face.SOUTH,
+    "down": Face.NORTH,
+    "left": Face.EAST,
+    "right": Face.WEST,
+}
+
+# The neighbouring cell each cardinal face guards, relative to the spike block.
+# UP guards the spike's own cell (relevant only for ground-level spikes) and is
+# handled separately, so it is intentionally absent here.
+_FACE_DELTA: dict[Face, tuple[int, int]] = {
+    Face.NORTH: (-1, 0),
+    Face.SOUTH: (1, 0),
+    Face.EAST: (0, 1),
+    Face.WEST: (0, -1),
+}
+
+ALL_FACES: frozenset[Face] = frozenset(
+    {Face.UP, Face.NORTH, Face.SOUTH, Face.EAST, Face.WEST}
+)
+
+MOVABLE_TYPES = (BlockType.MOVE_ONE, BlockType.ICE)
+
 # ---------------------------------------------------------------------------
 # Type aliases for readability
 # ---------------------------------------------------------------------------
@@ -38,14 +67,107 @@ _DELTA: dict[str, tuple[int, int]] = {
 # A row/column pair.
 Pos = tuple[int, int]
 
-# An immutable 2-D grid of BlockType values.
-Grid = tuple[tuple[BlockType, ...], ...]
+
+class Cell(NamedTuple):
+    """A single top-layer cell, carrying per-block properties.
+
+    Storing properties on the cell (rather than position-indexed side tables)
+    means they travel with the block automatically as it moves, and keeps the
+    whole top layer hashable for use as a BFS visited key.
+
+    Attributes:
+        type: The block type occupying this cell.
+        can_destroy_spike: If true, this block destroys the spike face it
+            slides into.  Meaningful only for movable blocks.
+        is_destroyed_by_spike: If true, this block is consumed when it strikes
+            a live spike face.  Meaningful only for movable blocks.
+        spiked_faces: The faces that still carry spikes.  Non-empty only while
+            ``type`` is SPIKE; a SPIKE whose faces are all cleared is converted
+            to a MOVE_ONE cell.
+    """
+
+    type: BlockType
+    can_destroy_spike: bool = False
+    is_destroyed_by_spike: bool = False
+    spiked_faces: frozenset[Face] = frozenset()
+
+
+# An immutable 2-D grid of Cell values (top layer).
+TopGrid = tuple[tuple[Cell, ...], ...]
+
+# An immutable 2-D grid of BlockType values (bottom layer; never changes).
+BottomGrid = tuple[tuple[BlockType, ...], ...]
 
 # Quicksand fill tracker: sorted tuple of ((row, col), fill_count) pairs.
 QuicksandCounts = tuple[tuple[Pos, int], ...]
 
-# Destroyed-spike record: (row, col, move_index_when_destroyed).
-SpikeRecord = tuple[int, int, int]
+# A raw cell as supplied by callers: a bare BlockType (or its string value) or
+# a BlockSpec object, or an already-normalised Cell.
+RawCell = Union[BlockType, BlockSpec, Cell, str]
+
+_EMPTY_CELL = Cell(BlockType.EMPTY)
+
+
+# ---------------------------------------------------------------------------
+# Cell normalisation
+# ---------------------------------------------------------------------------
+
+
+def _to_cell(value: RawCell) -> Cell:
+    """Normalise a raw cell value into a :class:`Cell` with resolved defaults.
+
+    Accepts an already-built Cell, a BlockSpec (with optional overrides), or a
+    bare BlockType / string.  Unset properties are filled in per type:
+      - ``can_destroy_spike`` defaults to true for movable blocks, else false.
+      - ``is_destroyed_by_spike`` defaults to true.
+      - ``spiked_faces`` defaults to all five faces for SPIKE, else empty.
+        (SPIKE_FLOOR lives on the bottom layer and is not represented here.)
+    """
+    if isinstance(value, Cell):
+        return value
+
+    if isinstance(value, BlockSpec):
+        btype = BlockType(value.type)
+        can_destroy = value.can_destroy_spike
+        is_destroyed = value.is_destroyed_by_spike
+        faces: Optional[frozenset[Face]] = (
+            frozenset(Face(f) for f in value.spiked_faces)
+            if value.spiked_faces is not None
+            else None
+        )
+    else:
+        btype = BlockType(value)
+        can_destroy = None
+        is_destroyed = None
+        faces = None
+
+    if can_destroy is None:
+        can_destroy = btype in MOVABLE_TYPES
+    if is_destroyed is None:
+        is_destroyed = True
+    if faces is None:
+        faces = ALL_FACES if btype == BlockType.SPIKE else frozenset()
+
+    return Cell(
+        type=btype,
+        can_destroy_spike=can_destroy,
+        is_destroyed_by_spike=is_destroyed,
+        spiked_faces=faces,
+    )
+
+
+def _movable_cell(block_type: BlockType) -> Cell:
+    """Return a fresh movable Cell with default spike-interaction flags.
+
+    Used when a fully de-spiked SPIKE block becomes an ordinary movable block.
+    """
+    return Cell(
+        type=block_type,
+        can_destroy_spike=True,
+        is_destroyed_by_spike=True,
+        spiked_faces=frozenset(),
+    )
+
 
 # ---------------------------------------------------------------------------
 # GameState
@@ -55,22 +177,22 @@ SpikeRecord = tuple[int, int, int]
 class GameState:
     """Immutable snapshot of the mutable parts of the board.
 
-    The bottom layer never changes, so it is held outside the state and passed
-    to every function that needs it.  Only the elements that *can* change
-    during play are stored here so that the state can be hashed and used as a
-    BFS visited key.
+    The bottom layer never changes except for spike-floor destruction, so it is
+    held outside the state and passed to every function that needs it.  Only the
+    elements that *can* change during play are stored here so that the state can
+    be hashed and used as a BFS visited key.
 
     Attributes:
-        top: Current top-layer grid.  Immutable 2-D tuple of BlockType values.
-        holes_filled: Positions of HOLE cells that have been filled by a
-            non-ICE block.  Filled holes are solid and walkable.
-        ice_holes_filled: Positions of HOLE cells that have been filled by an
-            ICE block.  These cells are walkable but slippery — any top-layer
-            block that would land here keeps sliding instead.
+        top: Current top-layer grid of Cells (carries block positions, spike
+            face state, and per-block properties).
+        holes_filled: Positions of HOLE cells filled by a non-ICE block.
+            Filled holes are solid and walkable.
+        ice_holes_filled: Positions of HOLE cells filled by an ICE block.
+            Walkable but slippery — a top-layer block landing here keeps sliding.
         quicksand_counts: How many top-layer blocks have fallen into each
             QUICKSAND cell.  A cell is walkable once its count reaches 2.
-        destroyed_spikes: Which SPIKE cells have been retracted and when (move
-            index).  Used to implement optional spike revival.
+        floor_spikes_destroyed: Positions of SPIKE_FLOOR cells whose top face
+            has been destroyed.  These behave as plain EMPTY floor.
     """
 
     __slots__ = (
@@ -78,46 +200,32 @@ class GameState:
         "holes_filled",
         "ice_holes_filled",
         "quicksand_counts",
-        "destroyed_spikes",
+        "floor_spikes_destroyed",
     )
 
     def __init__(
         self,
-        top: Grid,
+        top: TopGrid,
         holes_filled: frozenset[Pos],
         ice_holes_filled: frozenset[Pos],
         quicksand_counts: QuicksandCounts,
-        destroyed_spikes: tuple[SpikeRecord, ...],
+        floor_spikes_destroyed: frozenset[Pos],
     ) -> None:
         self.top = top
         self.holes_filled = holes_filled
         self.ice_holes_filled = ice_holes_filled
         self.quicksand_counts = quicksand_counts
-        self.destroyed_spikes = destroyed_spikes
+        self.floor_spikes_destroyed = floor_spikes_destroyed
 
     # Equality and hashing let GameState be used as a dict key / set member.
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, GameState):
             return NotImplemented
-        return (
-            self.top == other.top
-            and self.holes_filled == other.holes_filled
-            and self.ice_holes_filled == other.ice_holes_filled
-            and self.quicksand_counts == other.quicksand_counts
-            and self.destroyed_spikes == other.destroyed_spikes
-        )
+        return self._key() == other._key()
 
     def __hash__(self) -> int:
-        return hash(
-            (
-                self.top,
-                self.holes_filled,
-                self.ice_holes_filled,
-                self.quicksand_counts,
-                self.destroyed_spikes,
-            )
-        )
+        return hash(self._key())
 
     def _key(self) -> tuple:
         return (
@@ -125,7 +233,7 @@ class GameState:
             self.holes_filled,
             self.ice_holes_filled,
             self.quicksand_counts,
-            self.destroyed_spikes,
+            self.floor_spikes_destroyed,
         )
 
 
@@ -134,17 +242,32 @@ class GameState:
 # ---------------------------------------------------------------------------
 
 
-def _grid_from_lists(rows: list[list[BlockType]]) -> Grid:
-    """Convert a mutable 2-D list into an immutable tuple-of-tuples grid."""
-    return tuple(tuple(row) for row in rows)
+def _top_grid_from_lists(rows: Sequence[Sequence[RawCell]]) -> TopGrid:
+    """Convert a mutable 2-D list of raw cells into an immutable Cell grid."""
+    return tuple(tuple(_to_cell(cell) for cell in row) for row in rows)
 
 
-def _grid_to_lists(grid: Grid) -> list[list[BlockType]]:
-    """Convert an immutable grid back to a mutable 2-D list for editing."""
+def _top_grid_to_lists(grid: TopGrid) -> list[list[Cell]]:
+    """Convert an immutable Cell grid back to a mutable 2-D list for editing."""
     return [list(row) for row in grid]
 
 
-def _in_bounds(grid: Grid, row: int, col: int) -> bool:
+def _bottom_grid_from_lists(rows: list[list[RawCell]]) -> BottomGrid:
+    """Convert a mutable 2-D floor list into an immutable BlockType grid.
+
+    The bottom layer carries no per-cell properties, so each cell is reduced to
+    its bare BlockType (a BlockSpec floor cell contributes only its ``type``).
+    """
+    return tuple(
+        tuple(
+            BlockType(cell.type) if isinstance(cell, BlockSpec) else BlockType(cell)
+            for cell in row
+        )
+        for row in rows
+    )
+
+
+def _in_bounds(grid: tuple, row: int, col: int) -> bool:
     """Return True if (row, col) is a valid coordinate for *grid*."""
     return 0 <= row < len(grid) and 0 <= col < len(grid[0])
 
@@ -177,23 +300,25 @@ def _qs_increment(quicksand_counts: QuicksandCounts, pos: Pos) -> QuicksandCount
 def _effective_floor(
     row: int,
     col: int,
-    bottom: Grid,
+    bottom: BottomGrid,
     holes_filled: frozenset[Pos],
     ice_holes_filled: frozenset[Pos],
     quicksand_counts: QuicksandCounts,
+    floor_spikes_destroyed: frozenset[Pos] = frozenset(),
 ) -> BlockType:
     """Return the *effective* floor type at (row, col) after runtime changes.
 
-    The bottom layer is immutable, but holes can be filled at runtime (by
-    blocks falling in) and quicksand can become walkable after two fills.
-    This function resolves the current effective floor type so the rest of
-    the solver only needs to call it once per cell.
+    The bottom layer is immutable, but holes can be filled at runtime, quicksand
+    can become walkable after two fills, and a ground-level spike's top face can
+    be destroyed.  This resolves the current effective floor so the rest of the
+    solver only needs to call it once per cell.
 
     Effective floor rules (in priority order):
-    1. If the original cell is HOLE and it is in holes_filled → EMPTY.
-    2. If the original cell is HOLE and it is in ice_holes_filled → ICE_FLOOR.
-    3. If the original cell is QUICKSAND and fill count >= 2 → EMPTY.
-    4. Otherwise return the original bottom-layer value.
+    1. HOLE in holes_filled → EMPTY.
+    2. HOLE in ice_holes_filled → ICE_FLOOR.
+    3. QUICKSAND with fill count >= 2 → EMPTY.
+    4. SPIKE_FLOOR in floor_spikes_destroyed → EMPTY.
+    5. Otherwise the original bottom-layer value.
     """
     pos = (row, col)
     original = bottom[row][col]
@@ -205,192 +330,176 @@ def _effective_floor(
     if original == BlockType.QUICKSAND:
         if _qs_count(quicksand_counts, pos) >= 2:
             return BlockType.EMPTY
+    if original == BlockType.SPIKE_FLOOR:
+        if pos in floor_spikes_destroyed:
+            return BlockType.EMPTY
     return original
 
 
 def _is_slippery_floor(floor: BlockType) -> bool:
     """Return True if the floor type causes top-layer blocks to keep sliding.
 
-    Both ICE_FLOOR (placed on the bottom layer at level design time) and the
-    runtime equivalent created when an ICE block fills a HOLE cause sliding.
-    Phil is not affected — only sliding top-layer blocks are.
+    Both ICE_FLOOR (placed at design time) and the runtime equivalent created
+    when an ICE block fills a HOLE cause sliding.  Phil is unaffected.
     """
     return floor == BlockType.ICE_FLOOR
+
+
+def _cell_blocked_by_spike(top: TopGrid, row: int, col: int) -> bool:
+    """Return True if a still-spiked face of an adjacent SPIKE guards (row, col).
+
+    A SPIKE at (sr, sc) with a cardinal face F guards the neighbour in F's
+    direction.  Phil cannot occupy a cell guarded by any live face.  (The UP
+    face of a top-layer spike guards nothing in 2-D; ground-level spike UP faces
+    are handled through the effective floor instead.)
+    """
+    for face, (fdr, fdc) in _FACE_DELTA.items():
+        # A spike that would guard (row, col) via *face* sits one step back
+        # along that face's direction.
+        sr, sc = row - fdr, col - fdc
+        if _in_bounds(top, sr, sc):
+            cell = top[sr][sc]
+            if cell.type == BlockType.SPIKE and face in cell.spiked_faces:
+                return True
+    return False
 
 
 def _is_phil_walkable(
     row: int,
     col: int,
-    top_cell: BlockType,
+    top_cell: Union[Cell, BlockType],
     effective_floor: BlockType,
 ) -> bool:
-    """Return True if Phil can occupy (row, col) given current board state.
+    """Return True if Phil can occupy (row, col) ignoring adjacent spike faces.
 
     Phil can enter a cell when:
     - The top-layer cell is EMPTY, PHIL, or GOAL (nothing blocks him).
-    - The effective floor is not HOLE, STATIC, or unfilled QUICKSAND.
+    - The effective floor is not HOLE, STATIC, unfilled QUICKSAND, or an intact
+      SPIKE_FLOOR.
 
-    Callers must pass the *effective* floor (after applying runtime fill
-    changes) rather than the raw bottom-layer value.
+    The adjacent-spike-face guard is applied separately by the flood-fill (see
+    :func:`_cell_blocked_by_spike`) so this predicate stays purely cell-local.
+    ``top_cell`` may be a Cell or a bare BlockType.
+
+    Callers must pass the *effective* floor (after runtime fill changes).
     """
-    if top_cell not in (BlockType.EMPTY, BlockType.PHIL, BlockType.GOAL):
+    cell_type = top_cell.type if isinstance(top_cell, Cell) else top_cell
+    if cell_type not in (BlockType.EMPTY, BlockType.PHIL, BlockType.GOAL):
         return False
-    if effective_floor in (BlockType.HOLE, BlockType.STATIC, BlockType.QUICKSAND):
-        # QUICKSAND that reaches here still has count < 2 (unfilled),
-        # because _effective_floor already returns EMPTY once count >= 2.
+    if effective_floor in (
+        BlockType.HOLE,
+        BlockType.STATIC,
+        BlockType.QUICKSAND,
+        BlockType.SPIKE_FLOOR,
+    ):
+        # QUICKSAND / SPIKE_FLOOR reaching here are still impassable;
+        # _effective_floor already returns EMPTY once they become walkable.
         return False
     return True
 
 
 # ---------------------------------------------------------------------------
-# Spike revival
-# ---------------------------------------------------------------------------
-
-
-def _apply_spike_revival(
-    state: GameState,
-    move_index: int,
-    spike_revival_moves: Optional[int],
-) -> GameState:
-    """Restore any spikes that have served their retraction period.
-
-    If spike_revival_moves is None, spikes never revive and this is a no-op.
-    Otherwise, any spike whose (move_index - destroyed_at_move) >= threshold
-    is placed back onto the top layer as a SPIKE cell.
-
-    Args:
-        state: Current game state.
-        move_index: Index of the move *about to be applied* (0-based).
-        spike_revival_moves: Number of player moves after which a retracted
-            spike revives.  None means the spike never returns.
-
-    Returns:
-        A new GameState with revived spikes restored (or the same state if
-        nothing changed).
-    """
-    if spike_revival_moves is None or not state.destroyed_spikes:
-        return state
-
-    surviving: list[SpikeRecord] = []
-    revived: list[Pos] = []
-
-    for row, col, destroyed_at in state.destroyed_spikes:
-        if move_index - destroyed_at >= spike_revival_moves:
-            revived.append((row, col))
-        else:
-            surviving.append((row, col, destroyed_at))
-
-    if not revived:
-        return state
-
-    top_lists = _grid_to_lists(state.top)
-    for row, col in revived:
-        top_lists[row][col] = BlockType.SPIKE
-
-    return GameState(
-        top=_grid_from_lists(top_lists),
-        holes_filled=state.holes_filled,
-        ice_holes_filled=state.ice_holes_filled,
-        quicksand_counts=state.quicksand_counts,
-        destroyed_spikes=tuple(surviving),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Block destination computation (includes ice sliding)
+# Block destination computation (includes ice sliding + spike encounters)
 # ---------------------------------------------------------------------------
 
 
 def _compute_destination(
     block_pos: Pos,
     direction: str,
-    top: Grid,
-    bottom: Grid,
+    top: TopGrid,
+    bottom: BottomGrid,
     holes_filled: frozenset[Pos],
     ice_holes_filled: frozenset[Pos],
     quicksand_counts: QuicksandCounts,
-) -> Optional[tuple[str, int, int]]:
-    """Compute where a block ends up after being pushed in *direction*.
+    floor_spikes_destroyed: frozenset[Pos],
+) -> Optional[tuple]:
+    """Compute where a pushed block ends up, before block-specific resolution.
 
-    Handles normal one-step movement and the ice-sliding rule: if the block
-    would land on a slippery floor (ICE_FLOOR or an ice-filled hole), it
-    keeps advancing until a stopping condition is met.
+    Handles one-step movement, ice sliding, and the *geometry* of spike
+    encounters.  Whether a spike face is destroyed and whether the block
+    survives depends on the block's own properties and is resolved by the
+    caller (:func:`_apply_move`).
 
-    Stopping conditions (in order of priority):
-    - Next cell is out-of-bounds → land at current cell.
-    - Next cell has a top-layer block (non-EMPTY, non-GOAL) → land at current.
-    - Next cell's effective floor is STATIC → land at current cell.
-    - Next cell's effective floor is an unfilled HOLE or QUICKSAND → fall there.
-    - Next cell's effective floor is non-slippery → land at next cell.
-    - Next cell's effective floor is slippery → continue sliding.
+    Stopping / outcome conditions (checked at each step):
+    - Out-of-bounds → land at the current cell (or illegal on the first step).
+    - Next cell is a SPIKE whose struck face is still spiked → ``("SPIKE", r, c)``.
+    - Next cell is a SPIKE whose struck face is already clear, or any other
+      non-EMPTY top block → it acts as a wall; stop at the current cell.
+    - Next floor is STATIC → wall; stop at the current cell.
+    - Next floor is an unfilled HOLE / QUICKSAND → ``("FALL", r, c)``.
+    - Next floor is an intact SPIKE_FLOOR → ``("FLOOR_SPIKE", r, c)``.
+    - Next floor is non-slippery → ``("LAND", r, c)``.
+    - Next floor is slippery → keep sliding.
 
-    Args:
-        block_pos: Current (row, col) of the block being pushed.
-        direction: One of "up", "down", "left", "right".
-        top: Current top-layer grid.
-        bottom: Bottom-layer grid (immutable).
-        holes_filled: Holes filled by non-ice blocks.
-        ice_holes_filled: Holes filled by ICE blocks (slippery).
-        quicksand_counts: Current quicksand fill counts.
-
-    Returns:
-        A tuple ("LAND", row, col) if the block slides to a new position,
-        ("FALL", row, col) if it falls into a hole or quicksand, or None if
-        the move is entirely blocked (illegal).
+    Returns one of ``("LAND"|"FALL"|"SPIKE"|"FLOOR_SPIKE", row, col)`` or None
+    if the move is entirely blocked (the block cannot advance and nothing else
+    happens).
     """
     dr, dc = _DELTA[direction]
     cur_row, cur_col = block_pos
+    hit_face = _HIT_FACE[direction]
 
-    # First step is always required — a move must advance at least one cell.
+    # --- First step (a move must advance at least one cell). ---------------
     next_row, next_col = cur_row + dr, cur_col + dc
-
     if not _in_bounds(top, next_row, next_col):
         return None  # Can't move off the board.
 
-    next_top = top[next_row][next_col]
-    # SPIKE is handled separately by the caller (spike collision removes both).
-    # GOAL and PHIL act as walls for blocks — only Phil himself can occupy them.
-    # Every other non-EMPTY cell (STATIC, BOUNCE, MOVE_ONE, ICE, PHIL, GOAL) blocks movement.
-    if next_top not in (BlockType.EMPTY, BlockType.SPIKE):
-        return None  # Destination occupied.
+    next_cell = top[next_row][next_col]
+    if next_cell.type == BlockType.SPIKE:
+        if hit_face in next_cell.spiked_faces:
+            return ("SPIKE", next_row, next_col)
+        return None  # Spike face already gone — acts as a wall on step one.
+    if next_cell.type != BlockType.EMPTY:
+        return None  # Destination occupied by another block.
 
     next_floor = _effective_floor(
-        next_row, next_col, bottom, holes_filled, ice_holes_filled, quicksand_counts
+        next_row,
+        next_col,
+        bottom,
+        holes_filled,
+        ice_holes_filled,
+        quicksand_counts,
+        floor_spikes_destroyed,
     )
-
     if next_floor == BlockType.STATIC:
         return None  # Can't slide into an iron floor cell.
-
     if next_floor in (BlockType.HOLE, BlockType.QUICKSAND):
-        # Block falls on the very first step.
         return ("FALL", next_row, next_col)
+    if next_floor == BlockType.SPIKE_FLOOR:
+        return ("FLOOR_SPIKE", next_row, next_col)
 
     # Block lands on the first step; if the floor is slippery it keeps going.
     cur_row, cur_col = next_row, next_col
 
     while _is_slippery_floor(next_floor):
-        # Try to advance one more cell.
         peek_row, peek_col = cur_row + dr, cur_col + dc
-
         if not _in_bounds(top, peek_row, peek_col):
             break  # Wall — stop here.
 
-        peek_top = top[peek_row][peek_col]
-        if peek_top not in (BlockType.EMPTY, BlockType.SPIKE):
-            break  # Blocked by another top-layer block (including GOAL/PHIL) — stop here.
+        peek_cell = top[peek_row][peek_col]
+        if peek_cell.type == BlockType.SPIKE:
+            if hit_face in peek_cell.spiked_faces:
+                return ("SPIKE", peek_row, peek_col)
+            break  # Spike face gone — acts as a wall; stop at current cell.
+        if peek_cell.type != BlockType.EMPTY:
+            break  # Blocked by another top-layer block — stop here.
 
         peek_floor = _effective_floor(
-            peek_row, peek_col, bottom, holes_filled, ice_holes_filled, quicksand_counts
+            peek_row,
+            peek_col,
+            bottom,
+            holes_filled,
+            ice_holes_filled,
+            quicksand_counts,
+            floor_spikes_destroyed,
         )
-
         if peek_floor == BlockType.STATIC:
             break  # Can't enter an iron floor cell — stop here.
-
         if peek_floor in (BlockType.HOLE, BlockType.QUICKSAND):
-            # Falls into the next cell.
             return ("FALL", peek_row, peek_col)
+        if peek_floor == BlockType.SPIKE_FLOOR:
+            return ("FLOOR_SPIKE", peek_row, peek_col)
 
-        # Advance.
         cur_row, cur_col = peek_row, peek_col
         next_floor = peek_floor
 
@@ -406,45 +515,37 @@ def _apply_move(
     state: GameState,
     block_pos: Pos,
     direction: str,
-    bottom: Grid,
-    move_index: int,
-    spike_revival_moves: Optional[int],
+    bottom: BottomGrid,
 ) -> Optional[GameState]:
     """Apply a single player push and return the resulting GameState.
 
     Implements (in order):
-    1. Spike revival — any spike past its revival threshold is restored first.
-    2. Destination computation — including ice sliding.
-    3. FALL handling — hole fill or quicksand increment.
-    4. LAND handling — place block at destination.
-    5. Spike collision — block + spike both removed; spike record appended.
-    6. Bumper interaction — chains as far as consecutive bumpers allow.
-    7. No-op rejection — returns None if state is unchanged.
+    1. Destination computation — including ice sliding and spike encounters.
+    2. FALL — hole fill or quicksand increment.
+    3. LAND — place the block, then resolve any bumper interaction.
+    4. SPIKE collision — destroy the struck face (if the block can) and consume
+       the block (if it is destroyed by spikes); a fully de-spiked SPIKE becomes
+       a MOVE_ONE block.
+    5. FLOOR_SPIKE collision — same logic against a ground-level spike's top face.
+    6. No-op rejection — return None if the board is unchanged.
 
     Args:
         state: Current game state.
         block_pos: (row, col) of the block the player is pushing.
-        direction: Direction of the push ("up" / "down" / "left" / "right").
+        direction: One of "up" / "down" / "left" / "right".
         bottom: Immutable bottom-layer grid.
-        move_index: Index of this player move (used for spike revival tracking).
-        spike_revival_moves: Move threshold for spike revival (None = never).
 
     Returns:
-        The new GameState after the move, or None if the move is illegal or
-        results in no change to the board.
+        The new GameState, or None if the move is illegal or a no-op.
     """
-    # 1. Apply spike revival before processing the move.
-    state = _apply_spike_revival(state, move_index, spike_revival_moves)
-
     block_row, block_col = block_pos
-    block_type = state.top[block_row][block_col]
+    block_cell = state.top[block_row][block_col]
 
     # Only MOVE_ONE and ICE blocks can be pushed.  (Bumper recursion pushes
     # these same types, so this guard also applies inside bumper resolution.)
-    if block_type not in (BlockType.MOVE_ONE, BlockType.ICE):
+    if block_cell.type not in MOVABLE_TYPES:
         return None
 
-    # 2. Compute destination.
     dest = _compute_destination(
         block_pos,
         direction,
@@ -453,153 +554,189 @@ def _apply_move(
         state.holes_filled,
         state.ice_holes_filled,
         state.quicksand_counts,
+        state.floor_spikes_destroyed,
     )
-
     if dest is None:
         return None  # Move is illegal.
 
     dest_kind, dest_row, dest_col = dest
 
-    top_lists = _grid_to_lists(state.top)
+    top_lists = _top_grid_to_lists(state.top)
     holes_filled = state.holes_filled
     ice_holes_filled = state.ice_holes_filled
     quicksand_counts = state.quicksand_counts
-    destroyed_spikes = state.destroyed_spikes
+    floor_spikes_destroyed = state.floor_spikes_destroyed
 
-    # Remove the block from its current position.
-    top_lists[block_row][block_col] = BlockType.EMPTY
+    # The block always leaves its starting cell.
+    top_lists[block_row][block_col] = _EMPTY_CELL
 
     if dest_kind == "FALL":
-        # 3a. Block falls into a HOLE.
         original_floor = bottom[dest_row][dest_col]
         if original_floor == BlockType.HOLE:
-            if block_type == BlockType.ICE:
-                # ICE fills the hole with a slippery surface.
+            if block_cell.type == BlockType.ICE:
                 ice_holes_filled = ice_holes_filled | {(dest_row, dest_col)}
             else:
-                # Any other block fills the hole solidly.
                 holes_filled = holes_filled | {(dest_row, dest_col)}
-
-        # 3b. Block falls into QUICKSAND.
         elif original_floor == BlockType.QUICKSAND:
             quicksand_counts = _qs_increment(quicksand_counts, (dest_row, dest_col))
             # Block is consumed — it does not appear on the top layer.
 
-    else:
-        # dest_kind == "LAND"
-        dest_top = state.top[dest_row][dest_col]
+    elif dest_kind == "SPIKE":
+        _resolve_spike_collision(
+            top_lists,
+            block_cell,
+            spike_pos=(dest_row, dest_col),
+            direction=direction,
+        )
 
-        # 5. Spike collision — block and spike cancel each other.
-        if dest_top == BlockType.SPIKE:
-            # Both removed; spike recorded as destroyed.
-            top_lists[dest_row][dest_col] = BlockType.EMPTY
-            destroyed_spikes = destroyed_spikes + ((dest_row, dest_col, move_index),)
+    elif dest_kind == "FLOOR_SPIKE":
+        floor_spikes_destroyed = _resolve_floor_spike_collision(
+            top_lists,
+            block_cell,
+            floor_pos=(dest_row, dest_col),
+            direction=direction,
+            floor_spikes_destroyed=floor_spikes_destroyed,
+        )
 
-        else:
-            # 4. Normal landing — place the block.
-            top_lists[dest_row][dest_col] = block_type
+    else:  # dest_kind == "LAND"
+        top_lists[dest_row][dest_col] = block_cell
 
-            # 6. Bumper interaction — chains through consecutive bumpers.
-            new_top = _grid_from_lists(top_lists)
-            intermediate = GameState(
-                top=new_top,
-                holes_filled=holes_filled,
-                ice_holes_filled=ice_holes_filled,
-                quicksand_counts=quicksand_counts,
-                destroyed_spikes=destroyed_spikes,
-            )
-            bumped = _resolve_bumper(
-                intermediate,
-                (dest_row, dest_col),
-                direction,
-                bottom,
-                move_index,
-                spike_revival_moves,
-            )
-            if bumped is not None:
-                # The bumper chain produced a further state change.
-                # 7. Check for no-op after full resolution.
-                if bumped._key() == state._key():
-                    return None
-                return bumped
+        # Bumper interaction — chains through consecutive bumpers.
+        intermediate = GameState(
+            top=_top_grid_from_lists(top_lists),
+            holes_filled=holes_filled,
+            ice_holes_filled=ice_holes_filled,
+            quicksand_counts=quicksand_counts,
+            floor_spikes_destroyed=floor_spikes_destroyed,
+        )
+        bumped = _resolve_bumper(
+            intermediate, (dest_row, dest_col), direction, bottom
+        )
+        if bumped is not None:
+            if bumped._key() == state._key():
+                return None
+            return bumped
 
-    new_top = _grid_from_lists(top_lists)
     new_state = GameState(
-        top=new_top,
+        top=_top_grid_from_lists(top_lists),
         holes_filled=holes_filled,
         ice_holes_filled=ice_holes_filled,
         quicksand_counts=quicksand_counts,
-        destroyed_spikes=destroyed_spikes,
+        floor_spikes_destroyed=floor_spikes_destroyed,
     )
 
-    # 7. Reject no-ops.
     if new_state._key() == state._key():
-        return None
+        return None  # No-op.
 
     return new_state
+
+
+def _resolve_spike_collision(
+    top_lists: list[list[Cell]],
+    block_cell: Cell,
+    spike_pos: Pos,
+    direction: str,
+) -> None:
+    """Resolve a block striking a top-layer SPIKE face, mutating *top_lists*.
+
+    The block has already been cleared from its origin cell.  Here:
+    - If the block can destroy spikes, the struck face's spikes are removed.
+      When that empties the spike's last face, the spike becomes a MOVE_ONE.
+    - If the block is *not* destroyed by spikes, it survives and stops in the
+      cell immediately before the spike; otherwise it is consumed.
+
+    Bumper interactions are not triggered by a spike-stop landing.
+    """
+    dr, dc = _DELTA[direction]
+    hit_face = _HIT_FACE[direction]
+    spike_row, spike_col = spike_pos
+    spike_cell = top_lists[spike_row][spike_col]
+
+    if block_cell.can_destroy_spike:
+        remaining = spike_cell.spiked_faces - {hit_face}
+        if remaining:
+            top_lists[spike_row][spike_col] = spike_cell._replace(
+                spiked_faces=remaining
+            )
+        else:
+            # Last face gone — the spike is now an ordinary movable block.
+            top_lists[spike_row][spike_col] = _movable_cell(BlockType.MOVE_ONE)
+
+    if not block_cell.is_destroyed_by_spike:
+        stop_row, stop_col = spike_row - dr, spike_col - dc
+        top_lists[stop_row][stop_col] = block_cell
+    # Otherwise the block is consumed (already removed from its origin).
+
+
+def _resolve_floor_spike_collision(
+    top_lists: list[list[Cell]],
+    block_cell: Cell,
+    floor_pos: Pos,
+    direction: str,
+    floor_spikes_destroyed: frozenset[Pos],
+) -> frozenset[Pos]:
+    """Resolve a block sliding onto a ground-level SPIKE_FLOOR cell.
+
+    A SPIKE_FLOOR exposes only its top face.  If the block can destroy spikes,
+    that face is destroyed (the cell becomes plain floor) and the block lands on
+    it unless it is consumed.  If the block cannot destroy spikes it is either
+    consumed or — if it survives — stops in the cell before the floor spike.
+
+    Returns the (possibly updated) ``floor_spikes_destroyed`` set.
+    """
+    dr, dc = _DELTA[direction]
+    floor_row, floor_col = floor_pos
+
+    if block_cell.can_destroy_spike:
+        floor_spikes_destroyed = floor_spikes_destroyed | {floor_pos}
+        if not block_cell.is_destroyed_by_spike:
+            # Floor is now flat — the block lands on it.
+            top_lists[floor_row][floor_col] = block_cell
+        # Otherwise the block is consumed.
+    else:
+        if not block_cell.is_destroyed_by_spike:
+            stop_row, stop_col = floor_row - dr, floor_col - dc
+            top_lists[stop_row][stop_col] = block_cell
+        # Otherwise the block is consumed.
+
+    return floor_spikes_destroyed
 
 
 def _resolve_bumper(
     state: GameState,
     landed_pos: Pos,
     direction: str,
-    bottom: Grid,
-    move_index: int,
-    spike_revival_moves: Optional[int],
+    bottom: BottomGrid,
 ) -> Optional[GameState]:
     """Check for a bumper interaction after a block lands at *landed_pos*.
 
-    Rule: when a movable block lands in a cell adjacent to a BOUNCE block,
-    and another movable block sits on the *opposite* side of that BOUNCE block
-    along the same axis, the opposite block is bumped one cell further in the
-    same direction.
+    Rule: when a movable block lands in a cell adjacent to a BOUNCE block, and
+    another movable block sits on the *opposite* side of that BOUNCE block along
+    the same axis, the opposite block is bumped one cell further in the same
+    direction.  The bump is part of the same player move.  Bumpers chain through
+    a row of consecutive bumpers.
 
-    The bump is part of the same player move — it is not an extra player move.
-    Bumpers chain: a bumped block that lands adjacent to another BOUNCE block
-    triggers a further bump, and so on down a row of consecutive bumpers.
-
-    Args:
-        state: State after the block has landed (but before bumper resolution).
-        landed_pos: Where the block just landed.
-        direction: The direction the player pushed (same direction used for bump).
-        bottom: Immutable bottom-layer grid.
-        move_index: Current move index.
-        spike_revival_moves: Spike revival threshold.
-
-    Returns:
-        New state after the bump, or None if no bumper interaction occurred.
+    Returns the new state after the bump, or None if no bump occurred.
     """
     dr, dc = _DELTA[direction]
     land_row, land_col = landed_pos
 
-    # The BOUNCE block would be one step further in the push direction.
     bounce_row, bounce_col = land_row + dr, land_col + dc
     if not _in_bounds(state.top, bounce_row, bounce_col):
         return None
-    if state.top[bounce_row][bounce_col] != BlockType.BOUNCE:
+    if state.top[bounce_row][bounce_col].type != BlockType.BOUNCE:
         return None
 
-    # The block to be bumped is one step past the BOUNCE block.
     target_row, target_col = bounce_row + dr, bounce_col + dc
     if not _in_bounds(state.top, target_row, target_col):
         return None
-    target_type = state.top[target_row][target_col]
-    if target_type not in (BlockType.MOVE_ONE, BlockType.ICE):
+    if state.top[target_row][target_col].type not in MOVABLE_TYPES:
         return None  # Only movable blocks can be bumped.
 
-    # Bump the target block by recursing.  The bumped block lands via
-    # _apply_move, which itself re-runs bumper resolution — so a row of
-    # consecutive bumpers chains.  This terminates: every bump advances a
-    # block strictly further along the (fixed) push direction on a finite
-    # board, so the chain runs out at a boundary or a non-bumper cell.
-    return _apply_move(
-        state,
-        (target_row, target_col),
-        direction,
-        bottom,
-        move_index,
-        spike_revival_moves,
-    )
+    # Bump the target by recursing.  _apply_move re-runs bumper resolution, so a
+    # row of consecutive bumpers chains.  This terminates: every bump advances a
+    # block strictly further along the fixed push direction on a finite board.
+    return _apply_move(state, (target_row, target_col), direction, bottom)
 
 
 # ---------------------------------------------------------------------------
@@ -607,19 +744,19 @@ def _resolve_bumper(
 # ---------------------------------------------------------------------------
 
 
-def _find_phil_and_goal(top: Grid) -> tuple[Optional[Pos], Optional[Pos]]:
+def _find_phil_and_goal(top: TopGrid) -> tuple[Optional[Pos], Optional[Pos]]:
     """Scan the top layer and return (phil_pos, goal_pos).
 
-    Returns (None, None) elements for whichever special cell is absent.
-    A valid level has exactly one PHIL and one GOAL cell.
+    Returns None for whichever special cell is absent.  A valid level has
+    exactly one PHIL and one GOAL cell.
     """
     phil_pos: Optional[Pos] = None
     goal_pos: Optional[Pos] = None
     for r, row in enumerate(top):
         for c, cell in enumerate(row):
-            if cell == BlockType.PHIL:
+            if cell.type == BlockType.PHIL:
                 phil_pos = (r, c)
-            elif cell == BlockType.GOAL:
+            elif cell.type == BlockType.GOAL:
                 goal_pos = (r, c)
     return phil_pos, goal_pos
 
@@ -628,26 +765,15 @@ def _phil_can_reach_goal(
     state: GameState,
     phil_pos: Pos,
     goal_pos: Pos,
-    bottom: Grid,
+    bottom: BottomGrid,
 ) -> bool:
     """Return True if Phil can reach the GOAL from his starting position.
 
-    Uses BFS flood-fill from *phil_pos* over cells walkable by Phil.  Phil is
-    walkable at (r, c) when:
-    - The top-layer cell is EMPTY, PHIL, or GOAL.
-    - The effective floor is not HOLE, STATIC, or unfilled QUICKSAND.
-
-    Phil's starting cell (PHIL) always satisfies both conditions.
-
-    Args:
-        state: Current game state.
-        phil_pos: Phil's fixed position on the top layer.
-        goal_pos: Position of the GOAL cell.
-        bottom: Immutable bottom-layer grid.
+    BFS flood-fill from *phil_pos* over cells Phil can walk (see
+    :func:`_is_phil_walkable`).  Phil's own starting cell always qualifies.
     """
-    visited: set[Pos] = set()
+    visited: set[Pos] = {phil_pos}
     queue: deque[Pos] = deque([phil_pos])
-    visited.add(phil_pos)
 
     while queue:
         row, col = queue.popleft()
@@ -662,12 +788,17 @@ def _phil_can_reach_goal(
                 continue
 
             floor = _effective_floor(
-                nr, nc, bottom,
+                nr,
+                nc,
+                bottom,
                 state.holes_filled,
                 state.ice_holes_filled,
                 state.quicksand_counts,
+                state.floor_spikes_destroyed,
             )
-            if _is_phil_walkable(nr, nc, state.top[nr][nc], floor):
+            if _is_phil_walkable(
+                nr, nc, state.top[nr][nc], floor
+            ) and not _cell_blocked_by_spike(state.top, nr, nc):
                 visited.add((nr, nc))
                 queue.append((nr, nc))
 
@@ -679,38 +810,19 @@ def _phil_can_reach_goal(
 # ---------------------------------------------------------------------------
 
 
-def _get_valid_moves(
-    state: GameState,
-    bottom: Grid,
-    move_index: int,
-    spike_revival_moves: Optional[int],
-) -> list[tuple[Pos, str]]:
+def _get_valid_moves(state: GameState, bottom: BottomGrid) -> list[tuple[Pos, str]]:
     """Return all legal (block_position, direction) pairs for the current state.
 
-    A move is legal if _apply_move returns a non-None state that differs from
-    the current state.
-
-    Args:
-        state: Current game state.
-        bottom: Immutable bottom-layer grid.
-        move_index: Index of the move about to be made.
-        spike_revival_moves: Spike revival threshold.
+    A move is legal if :func:`_apply_move` returns a non-None state that differs
+    from the current state.
     """
     moves: list[tuple[Pos, str]] = []
     for r, row in enumerate(state.top):
         for c, cell in enumerate(row):
-            if cell not in (BlockType.MOVE_ONE, BlockType.ICE):
+            if cell.type not in MOVABLE_TYPES:
                 continue
             for direction in DIRECTIONS:
-                result = _apply_move(
-                    state,
-                    (r, c),
-                    direction,
-                    bottom,
-                    move_index,
-                    spike_revival_moves,
-                )
-                if result is not None:
+                if _apply_move(state, (r, c), direction, bottom) is not None:
                     moves.append(((r, c), direction))
     return moves
 
@@ -721,83 +833,64 @@ def _get_valid_moves(
 
 
 def solve(
-    floor_grid: list[list[BlockType]],
-    top_grid: list[list[BlockType]],
+    floor_grid: list[list[RawCell]],
+    top_grid: list[list[RawCell]],
     max_depth: int = 20,
-    spike_revival_moves: Optional[int] = None,
 ) -> dict:
     """Find the minimum number of player moves to win the given Phil level.
 
-    Uses BFS over game states.  Each BFS level corresponds to one player move.
-    The search is bounded by *max_depth* to handle hard or unsolvable levels.
+    Uses BFS over game states; each BFS level corresponds to one player move.
+    The search is bounded by *max_depth* for hard or unsolvable levels.
 
     A level is won when a continuous orthogonal path of Phil-walkable cells
     connects the PHIL cell to the GOAL cell on the top layer.
 
     Args:
-        floor_grid: 2-D list of BlockType values representing the bottom layer.
-            Valid values: EMPTY, STATIC, HOLE, QUICKSAND, ICE_FLOOR.
-        top_grid: 2-D list of BlockType values representing the top layer.
-            Valid values: EMPTY, STATIC, PHIL, GOAL, MOVE_ONE, ICE, BOUNCE, SPIKE.
+        floor_grid: 2-D list of bottom-layer cells.  Each cell is a BlockType
+            (EMPTY, STATIC, HOLE, QUICKSAND, ICE_FLOOR, SPIKE_FLOOR) or a
+            BlockSpec; floor cells use only their type.
+        top_grid: 2-D list of top-layer cells (BlockType or BlockSpec).  Valid
+            types: EMPTY, STATIC, PHIL, GOAL, MOVE_ONE, ICE, BOUNCE, SPIKE.
             Must contain exactly one PHIL and one GOAL cell.
-        max_depth: Maximum number of player moves to explore before giving up.
-            Default is 20.  Raise this for complex levels at the cost of
-            potentially much longer runtimes.
-        spike_revival_moves: Number of player moves after which a retracted
-            SPIKE revives.  None (the default) means spikes never return.
+        max_depth: Maximum number of player moves to explore (default 20).
 
     Returns:
-        A dict with the following keys:
+        A dict with keys:
             "solvable" (bool): True if a solution was found within max_depth.
             "min_moves" (int | None): Fewest moves needed, or None if unsolvable.
-            "moves" (list | None): Ordered list of moves, each a dict with keys
-                "block_row" (int), "block_col" (int), "direction" (str).
-                None if unsolvable.
+            "moves" (list | None): Ordered moves, each a dict with keys
+                "block_row", "block_col", "direction"; None if unsolvable.
     """
-    bottom = _grid_from_lists(floor_grid)
-    top = _grid_from_lists(top_grid)
+    bottom = _bottom_grid_from_lists(floor_grid)
+    top = _top_grid_from_lists(top_grid)
 
     initial_state = GameState(
         top=top,
         holes_filled=frozenset(),
         ice_holes_filled=frozenset(),
         quicksand_counts=(),
-        destroyed_spikes=(),
+        floor_spikes_destroyed=frozenset(),
     )
 
     phil_pos, goal_pos = _find_phil_and_goal(top)
-
     if phil_pos is None or goal_pos is None:
         return {"solvable": False, "min_moves": None, "moves": None}
 
-    # Check if the level is already solved without any moves.
+    # Already solved without any moves?
     if _phil_can_reach_goal(initial_state, phil_pos, goal_pos, bottom):
         return {"solvable": True, "min_moves": 0, "moves": []}
 
     # BFS: each node is (state, move_index, move_history).
-    # move_history is a list of {"block_row", "block_col", "direction"} dicts.
     visited: set[GameState] = {initial_state}
-    queue: deque[tuple[GameState, int, list[dict]]] = deque(
-        [(initial_state, 0, [])]
-    )
+    queue: deque[tuple[GameState, int, list[dict]]] = deque([(initial_state, 0, [])])
 
     while queue:
         current_state, move_index, history = queue.popleft()
-
         if move_index >= max_depth:
             continue
 
-        for (block_pos, direction) in _get_valid_moves(
-            current_state, bottom, move_index, spike_revival_moves
-        ):
-            next_state = _apply_move(
-                current_state,
-                block_pos,
-                direction,
-                bottom,
-                move_index,
-                spike_revival_moves,
-            )
+        for (block_pos, direction) in _get_valid_moves(current_state, bottom):
+            next_state = _apply_move(current_state, block_pos, direction, bottom)
             if next_state is None or next_state in visited:
                 continue
 

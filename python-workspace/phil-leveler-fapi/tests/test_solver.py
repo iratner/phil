@@ -14,16 +14,17 @@ Abbreviations used in inline board layouts:
 
 import pytest
 
-from app.models.level import BlockType
+from app.models.level import BlockSpec, BlockType, Face
 from app.solver.solver import (
     GameState,
     _apply_move,
+    _bottom_grid_from_lists,
     _compute_destination,
     _effective_floor,
     _find_phil_and_goal,
-    _grid_from_lists,
     _is_phil_walkable,
     _phil_can_reach_goal,
+    _top_grid_from_lists,
     solve,
 )
 
@@ -42,6 +43,12 @@ K = BlockType.SPIKE
 H = BlockType.HOLE
 Q = BlockType.QUICKSAND
 F = BlockType.ICE_FLOOR
+KF = BlockType.SPIKE_FLOOR  # ground-level spike (bottom layer)
+
+
+def _spike(*faces):
+    """Build a SPIKE BlockSpec with exactly *faces* spiked (Face members)."""
+    return BlockSpec(type=BlockType.SPIKE, spiked_faces=list(faces))
 
 
 # ---------------------------------------------------------------------------
@@ -49,28 +56,29 @@ F = BlockType.ICE_FLOOR
 # ---------------------------------------------------------------------------
 
 
-def _state(top_lists, holes=(), ice_holes=(), qs=(), spikes=()):
+def _state(top_lists, holes=(), ice_holes=(), qs=(), floor_spikes=()):
     """Build a GameState from a 2-D list *top_lists* and optional mutable state.
 
     Args:
-        top_lists: 2-D list of BlockType for the top layer.
+        top_lists: 2-D list of cells (BlockType or BlockSpec) for the top layer.
         holes: Iterable of (row, col) positions of non-ice filled holes.
         ice_holes: Iterable of (row, col) positions of ice-filled holes.
         qs: Iterable of ((row, col), count) pairs for quicksand fill counts.
-        spikes: Iterable of (row, col, destroyed_at_move) triples.
+        floor_spikes: Iterable of (row, col) SPIKE_FLOOR cells whose top face
+            has been destroyed.
     """
     return GameState(
-        top=_grid_from_lists(top_lists),
+        top=_top_grid_from_lists(top_lists),
         holes_filled=frozenset(holes),
         ice_holes_filled=frozenset(ice_holes),
         quicksand_counts=tuple(sorted(qs)),
-        destroyed_spikes=tuple(spikes),
+        floor_spikes_destroyed=frozenset(floor_spikes),
     )
 
 
 def _bottom(rows):
-    """Shorthand: convert a 2-D list to an immutable Grid for the floor."""
-    return _grid_from_lists(rows)
+    """Shorthand: convert a 2-D list to an immutable floor grid."""
+    return _bottom_grid_from_lists(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +90,7 @@ def _assert_solve(floor, top, expected_moves, **kwargs):
     """Run the solver and assert the minimum move count equals *expected_moves*.
 
     Pass expected_moves=None to assert the level is unsolvable.
-    Extra kwargs are forwarded to solve() (e.g. max_depth, spike_revival_moves).
+    Extra kwargs are forwarded to solve() (e.g. max_depth).
     """
     result = solve(floor, top, **kwargs)
     if expected_moves is None:
@@ -199,11 +207,11 @@ class TestMoveOneBlock:
         top_lists = [[M, E, E]]
         state = _state(top_lists)
         # Pushing left from the leftmost column goes off the board.
-        assert _apply_move(state, (0, 0), "left", bottom, 0, None) is None
+        assert _apply_move(state, (0, 0), "left", bottom) is None
         # Pushing up on a single-row board also goes off the board.
-        assert _apply_move(state, (0, 0), "up",   bottom, 0, None) is None
+        assert _apply_move(state, (0, 0), "up",   bottom) is None
         # Pushing right is valid (destination is empty).
-        assert _apply_move(state, (0, 0), "right", bottom, 0, None) is not None
+        assert _apply_move(state, (0, 0), "right", bottom) is not None
 
     def test_blocked_by_static_top(self):
         """MOVE_ONE cannot push into a cell occupied by a STATIC block."""
@@ -326,11 +334,11 @@ class TestIceBlock:
         # → [0][1] has floor HOLE → FALL → ice_holes_filled gains (0,1).
         top_lists2 = [[I, E, E]]
         state2 = _state(top_lists2)
-        result = _apply_move(state2, (0, 0), "right", bottom, move_index=0, spike_revival_moves=None)
+        result = _apply_move(state2, (0, 0), "right", bottom)
         assert result is not None
         assert (0, 1) in result.ice_holes_filled
         assert (0, 1) not in result.holes_filled
-        assert result.top[0][0] == BlockType.EMPTY  # ICE removed from top
+        assert result.top[0][0].type == BlockType.EMPTY  # ICE removed from top
 
     def test_ice_filled_hole_is_walkable_for_phil(self):
         """Phil can walk over an ice-filled hole (it becomes walkable floor)."""
@@ -361,10 +369,10 @@ class TestIceBlock:
         state2 = _state(top_lists2, ice_holes={(0, 1)})  # ice at [0][1]
         # Push M right: first step [0][1] = ice → slide.
         # [0][2]: floor EMPTY → land at [0][2].
-        result = _apply_move(state2, (0, 0), "right", bottom2, move_index=0, spike_revival_moves=None)
+        result = _apply_move(state2, (0, 0), "right", bottom2)
         assert result is not None
-        assert result.top[0][0] == BlockType.EMPTY
-        assert result.top[0][2] == BlockType.MOVE_ONE  # landed past the ice
+        assert result.top[0][0].type == BlockType.EMPTY
+        assert result.top[0][2].type == BlockType.MOVE_ONE  # landed past the ice
 
     def test_ice_floor_initial_causes_sliding(self):
         """An ICE_FLOOR cell placed at level design time also causes block sliding."""
@@ -374,9 +382,9 @@ class TestIceBlock:
         state = _state(top_lists)
         # Pushing M right: [0][1] has ICE_FLOOR → slide.
         # [0][2]: floor EMPTY → land at [0][2].
-        result = _apply_move(state, (0, 0), "right", bottom, move_index=0, spike_revival_moves=None)
+        result = _apply_move(state, (0, 0), "right", bottom)
         assert result is not None
-        assert result.top[0][2] == BlockType.MOVE_ONE
+        assert result.top[0][2].type == BlockType.MOVE_ONE
 
     def test_sliding_block_falls_into_hole_past_ice(self):
         """A block sliding over ice falls when it reaches an unfilled hole."""
@@ -387,11 +395,11 @@ class TestIceBlock:
         bottom = _bottom(floor_lists)
         top_lists = [[M, E, E, E, E]]
         state = _state(top_lists, ice_holes={(0, 1)})  # ice-filled hole at [0][1]
-        result = _apply_move(state, (0, 0), "right", bottom, move_index=0, spike_revival_moves=None)
+        result = _apply_move(state, (0, 0), "right", bottom)
         assert result is not None
         # M fell into the hole at [0][2] — solidly filled (M is MOVE_ONE).
         assert (0, 2) in result.holes_filled
-        assert result.top[0][0] == BlockType.EMPTY
+        assert result.top[0][0].type == BlockType.EMPTY
 
     def test_sliding_stops_at_wall(self):
         """A sliding block stops at the board edge."""
@@ -401,9 +409,9 @@ class TestIceBlock:
         state = _state(top_lists)
         # Push M right: [0][1] ice → slide → [0][2] ice → slide → [0][3] ice →
         # [0][4] EMPTY floor → land at [0][4].
-        result = _apply_move(state, (0, 0), "right", bottom, move_index=0, spike_revival_moves=None)
+        result = _apply_move(state, (0, 0), "right", bottom)
         assert result is not None
-        assert result.top[0][4] == BlockType.MOVE_ONE
+        assert result.top[0][4].type == BlockType.MOVE_ONE
 
 
 # ===========================================================================
@@ -412,79 +420,133 @@ class TestIceBlock:
 
 
 class TestSpikeBlock:
-    """Blocks sliding into SPIKEs are destroyed; spike retracts; optional revival."""
+    """SPIKE blocks have five independently spiked faces.  A movable block that
+    can destroy spikes removes the single face it strikes; whether the block is
+    itself consumed depends on its is_destroyed_by_spike flag; a spike whose
+    faces are all cleared becomes an ordinary movable block; and Phil cannot
+    occupy a cell guarded by a live spike face."""
 
-    def test_block_destroyed_by_spike(self):
-        """A MOVE_ONE block pushed into a SPIKE removes both from the board."""
-        floor_lists = [[E, E, E]]
-        bottom = _bottom(floor_lists)
-        top_lists = [[M, E, K]]  # M at [0][0], SPIKE at [0][2]
-        state = _state(top_lists)
-        # Push M right: first step [0][1] EMPTY → LAND at [0][1], no spike there.
-        # We need M adjacent to spike.  Place M at [0][1]:
-        top_lists2 = [[E, M, K]]
-        state2 = _state(top_lists2)
-        result = _apply_move(state2, (0, 1), "right", bottom, move_index=0, spike_revival_moves=None)
+    def test_strikes_one_face_and_is_consumed_by_default(self):
+        """A default movable block destroys the struck face and is consumed."""
+        bottom = _bottom([[E, E, E]])
+        # M adjacent to a full spike; push right → strikes the spike's WEST face.
+        state = _state([[E, M, K]])
+        result = _apply_move(state, (0, 1), "right", bottom)
         assert result is not None
-        assert result.top[0][1] == BlockType.EMPTY   # M gone
-        assert result.top[0][2] == BlockType.EMPTY   # spike gone
-        assert len(result.destroyed_spikes) == 1
-        assert result.destroyed_spikes[0][:2] == (0, 2)
+        assert result.top[0][1].type == BlockType.EMPTY  # M consumed (default)
+        spike = result.top[0][2]
+        assert spike.type == BlockType.SPIKE  # other faces remain
+        assert Face.WEST not in spike.spiked_faces
+        assert len(spike.spiked_faces) == 4
 
-    def test_spike_never_revives_by_default(self):
-        """With spike_revival_moves=None, destroyed spikes stay gone forever."""
-        floor_lists = [[E, E, E]]
-        bottom = _bottom(floor_lists)
-        top_lists = [[E, M, K]]
-        state = _state(top_lists)
-        state_after = _apply_move(state, (0, 1), "right", bottom, move_index=0, spike_revival_moves=None)
-        assert state_after is not None
-        assert state_after.top[0][2] == BlockType.EMPTY
+    def test_block_survives_and_stops_before_spike(self):
+        """is_destroyed_by_spike=False: the block survives and stops adjacent."""
+        bottom = _bottom([[F, F, E]])  # ice floor so the block slides into reach
+        survivor = BlockSpec(
+            type=BlockType.MOVE_ONE,
+            can_destroy_spike=True,
+            is_destroyed_by_spike=False,
+        )
+        state = _state([[survivor, E, K]])
+        result = _apply_move(state, (0, 0), "right", bottom)
+        assert result is not None
+        assert result.top[0][0].type == BlockType.EMPTY      # left origin
+        assert result.top[0][1].type == BlockType.MOVE_ONE   # stopped before spike
+        assert Face.WEST not in result.top[0][2].spiked_faces  # face destroyed
 
-        # Many moves later — spike should still be gone.
-        # (No further _apply_move needed; just verify the record.)
-        assert state_after.destroyed_spikes[0][2] == 0  # destroyed at move 0
-        # At move 999 with revival=None: still not revived.
-        for move_idx in [1, 5, 100]:
-            state_later = _apply_move(
-                state_after,
-                # Nothing to move — just need revival check; make a dummy no-op attempt.
-                # Instead, directly check _apply_spike_revival.
-                (0, 0),  # EMPTY cell — invalid, returns None
-                "right",
-                bottom,
-                move_index=move_idx,
-                spike_revival_moves=None,
-            )
-            # None because (0,0) is EMPTY — not a movable block.
-            assert state_later is None
+    def test_face_not_destroyed_when_block_cannot_destroy(self):
+        """can_destroy_spike=False: the face survives and the block is consumed."""
+        bottom = _bottom([[E, E, E]])
+        weak = BlockSpec(
+            type=BlockType.MOVE_ONE,
+            can_destroy_spike=False,
+            is_destroyed_by_spike=True,
+        )
+        state = _state([[E, weak, K]])
+        result = _apply_move(state, (0, 1), "right", bottom)
+        assert result is not None
+        assert result.top[0][1].type == BlockType.EMPTY        # block consumed
+        assert Face.WEST in result.top[0][2].spiked_faces      # face intact
 
-    def test_spike_revival_after_n_moves(self):
-        """A destroyed spike revives after spike_revival_moves player moves."""
-        from app.solver.solver import _apply_spike_revival
+    def test_spike_becomes_movable_when_all_faces_cleared(self):
+        """Clearing a spike's last face turns it into a MOVE_ONE block."""
+        bottom = _bottom([[E, E, E]])
+        # Spike with only its WEST face spiked; push M right to clear it.
+        state = _state([[E, M, _spike(Face.WEST)]])
+        result = _apply_move(state, (0, 1), "right", bottom)
+        assert result is not None
+        assert result.top[0][1].type == BlockType.EMPTY        # M consumed
+        assert result.top[0][2].type == BlockType.MOVE_ONE     # spike now movable
 
-        # Create a state where a spike was destroyed at move 0.
-        top_lists = [[E, E, E]]
-        state = _state(top_lists, spikes=[(0, 2, 0)])  # spike at [0][2] destroyed at move 0
+    def test_live_face_blocks_phil_adjacency(self):
+        """Phil cannot enter a cell guarded by a live spike face; clearing it lets him."""
+        bottom = _bottom([[E, E, E], [E, E, E]])
+        phil, goal = (0, 0), (0, 2)
 
-        # At move 2, revival threshold 3: not yet revived.
-        s2 = _apply_spike_revival(state, move_index=2, spike_revival_moves=3)
-        assert s2.top[0][2] == BlockType.EMPTY
-        assert len(s2.destroyed_spikes) == 1
+        # Spike directly below (0,1): its NORTH face guards (0,1), blocking Phil.
+        blocked = _state([[P, E, G], [E, K, E]])
+        assert not _phil_can_reach_goal(blocked, phil, goal, bottom)
 
-        # At move 3, revival threshold 3: (3 - 0) >= 3 → revived.
-        s3 = _apply_spike_revival(state, move_index=3, spike_revival_moves=3)
-        assert s3.top[0][2] == BlockType.SPIKE
-        assert len(s3.destroyed_spikes) == 0
+        # Same spike without a NORTH face leaves (0,1) walkable.
+        open_path = _state([[P, E, G], [E, _spike(Face.SOUTH), E]])
+        assert _phil_can_reach_goal(open_path, phil, goal, bottom)
 
-    def test_spike_blocks_path_until_destroyed(self):
-        """Phil cannot path through a live SPIKE; destroying it opens the route."""
-        # Corridor: P _ K _ G  — spike at [0][2] blocks Phil.
-        # M at [0][1] can be pushed right to destroy the spike.
-        floor = [[E, E, E, E, E]]
-        top   = [[P, M, K, E, G]]
-        # Push M right: M hits K at [0][2] → both destroyed → path P→G opens.
+    def test_spike_blocks_path_until_face_destroyed(self):
+        """Destroying the face guarding Phil's only route solves the level."""
+        # Phil's only path to GOAL runs through (0,1), guarded by the spike's
+        # NORTH face and occupied by M.  Pushing M down strikes that face,
+        # consuming M and freeing the cell.
+        floor = [[E, E, E], [E, E, E]]
+        top = [[P, M, G], [S, K, S]]
         _assert_solve(floor, top, expected_moves=1)
+
+
+# ===========================================================================
+# 5b. SPIKE_FLOOR (ground-level spike)
+# ===========================================================================
+
+
+class TestSpikeFloor:
+    """A SPIKE_FLOOR exposes only its top face: Phil cannot stand on it and a
+    block cannot pass over it until a spike-destroying block clears the face."""
+
+    def test_effective_floor_intact_then_destroyed(self):
+        bottom = _bottom([[E, E, KF, E]])
+        intact = _state([[P, E, E, G]])
+        assert (
+            _effective_floor(
+                0, 2, bottom,
+                intact.holes_filled, intact.ice_holes_filled,
+                intact.quicksand_counts, intact.floor_spikes_destroyed,
+            )
+            == BlockType.SPIKE_FLOOR
+        )
+        cleared = _state([[P, E, E, G]], floor_spikes=[(0, 2)])
+        assert (
+            _effective_floor(
+                0, 2, bottom,
+                cleared.holes_filled, cleared.ice_holes_filled,
+                cleared.quicksand_counts, cleared.floor_spikes_destroyed,
+            )
+            == BlockType.EMPTY
+        )
+
+    def test_floor_spike_blocks_phil(self):
+        bottom = _bottom([[E, KF, E]])
+        state = _state([[P, E, G]])
+        assert not _phil_can_reach_goal(state, (0, 0), (0, 2), bottom)
+
+    def test_block_destroys_floor_spike_and_opens_path(self):
+        """A block pushed onto a floor spike destroys its top face."""
+        bottom = _bottom([[E, E, KF, E]])
+        state = _state([[P, M, E, G]])
+        result = _apply_move(state, (0, 1), "right", bottom)
+        assert result is not None
+        assert (0, 2) in result.floor_spikes_destroyed
+        assert result.top[0][1].type == BlockType.EMPTY  # M consumed (default)
+
+        # End to end: clearing the floor spike connects PHIL to GOAL.
+        _assert_solve([[E, E, KF, E]], [[P, M, E, G]], expected_moves=1)
 
 
 # ===========================================================================
@@ -504,13 +566,13 @@ class TestBounceBlock:
         bottom = _bottom(floor_lists)
         top_lists = [[M, E, B, M, E]]
         state = _state(top_lists)
-        result = _apply_move(state, (0, 0), "right", bottom, move_index=0, spike_revival_moves=None)
+        result = _apply_move(state, (0, 0), "right", bottom)
         assert result is not None
-        assert result.top[0][0] == BlockType.EMPTY   # original M moved
-        assert result.top[0][1] == BlockType.MOVE_ONE  # M landed here
-        assert result.top[0][2] == BlockType.BOUNCE    # bumper untouched
-        assert result.top[0][3] == BlockType.EMPTY     # M2 bumped away
-        assert result.top[0][4] == BlockType.MOVE_ONE  # M2 landed here
+        assert result.top[0][0].type == BlockType.EMPTY   # original M moved
+        assert result.top[0][1].type == BlockType.MOVE_ONE  # M landed here
+        assert result.top[0][2].type == BlockType.BOUNCE    # bumper untouched
+        assert result.top[0][3].type == BlockType.EMPTY     # M2 bumped away
+        assert result.top[0][4].type == BlockType.MOVE_ONE  # M2 landed here
 
     def test_bumper_no_trigger_without_opposite_block(self):
         """No bumper interaction if the opposite side of the BOUNCE is empty."""
@@ -518,10 +580,10 @@ class TestBounceBlock:
         bottom = _bottom(floor_lists)
         top_lists = [[M, E, B, E, E]]  # nothing on the other side of B
         state = _state(top_lists)
-        result = _apply_move(state, (0, 0), "right", bottom, move_index=0, spike_revival_moves=None)
+        result = _apply_move(state, (0, 0), "right", bottom)
         assert result is not None
-        assert result.top[0][1] == BlockType.MOVE_ONE  # M landed
-        assert result.top[0][3] == BlockType.EMPTY     # nothing bumped
+        assert result.top[0][1].type == BlockType.MOVE_ONE  # M landed
+        assert result.top[0][3].type == BlockType.EMPTY     # nothing bumped
 
     def test_bumped_block_can_fill_hole(self):
         """A block bumped by a BOUNCE can itself fall into a hole."""
@@ -532,9 +594,9 @@ class TestBounceBlock:
         bottom = _bottom(floor_lists)
         top_lists = [[M, E, B, M, E]]
         state = _state(top_lists)
-        result = _apply_move(state, (0, 0), "right", bottom, move_index=0, spike_revival_moves=None)
+        result = _apply_move(state, (0, 0), "right", bottom)
         assert result is not None
-        assert result.top[0][3] == BlockType.EMPTY   # M2 gone (fell)
+        assert result.top[0][3].type == BlockType.EMPTY   # M2 gone (fell)
         assert (0, 4) in result.holes_filled          # hole filled solidly
 
     def test_bumper_chains_through_consecutive_bumpers(self):
@@ -552,16 +614,16 @@ class TestBounceBlock:
         bottom = _bottom(floor_lists)
         top_lists = [[M, E, B, M, E, B, M, E]]
         state = _state(top_lists)
-        result = _apply_move(state, (0, 0), "right", bottom, move_index=0, spike_revival_moves=None)
+        result = _apply_move(state, (0, 0), "right", bottom)
         assert result is not None
-        assert result.top[0][0] == BlockType.EMPTY      # original M moved
-        assert result.top[0][1] == BlockType.MOVE_ONE   # M landed here
-        assert result.top[0][2] == BlockType.BOUNCE     # first bumper untouched
-        assert result.top[0][3] == BlockType.EMPTY      # M2 bumped away
-        assert result.top[0][4] == BlockType.MOVE_ONE   # M2 landed here
-        assert result.top[0][5] == BlockType.BOUNCE     # second bumper untouched
-        assert result.top[0][6] == BlockType.EMPTY      # M3 bumped away (chain)
-        assert result.top[0][7] == BlockType.MOVE_ONE   # M3 landed here
+        assert result.top[0][0].type == BlockType.EMPTY      # original M moved
+        assert result.top[0][1].type == BlockType.MOVE_ONE   # M landed here
+        assert result.top[0][2].type == BlockType.BOUNCE     # first bumper untouched
+        assert result.top[0][3].type == BlockType.EMPTY      # M2 bumped away
+        assert result.top[0][4].type == BlockType.MOVE_ONE   # M2 landed here
+        assert result.top[0][5].type == BlockType.BOUNCE     # second bumper untouched
+        assert result.top[0][6].type == BlockType.EMPTY      # M3 bumped away (chain)
+        assert result.top[0][7].type == BlockType.MOVE_ONE   # M3 landed here
 
     def test_bumper_cannot_be_moved_by_player(self):
         """The player cannot directly push a BOUNCE block."""
@@ -570,7 +632,7 @@ class TestBounceBlock:
         top_lists = [[E, B, E]]
         state = _state(top_lists)
         for direction in ("up", "down", "left", "right"):
-            result = _apply_move(state, (0, 1), direction, bottom, move_index=0, spike_revival_moves=None)
+            result = _apply_move(state, (0, 1), direction, bottom)
             assert result is None, f"BOUNCE should not be pushable ({direction})"
 
 
@@ -588,7 +650,7 @@ class TestQuicksand:
         bottom = _bottom(floor_lists)
         top_lists = [[M, E, E]]
         state = _state(top_lists)
-        result = _apply_move(state, (0, 0), "right", bottom, move_index=0, spike_revival_moves=None)
+        result = _apply_move(state, (0, 0), "right", bottom)
         assert result is not None
         from app.solver.solver import _qs_count
         assert _qs_count(result.quicksand_counts, (0, 1)) == 1
@@ -603,11 +665,11 @@ class TestQuicksand:
         top_lists = [[M, E, E]]
         state = _state(top_lists)
         # First fill.
-        s1 = _apply_move(state, (0, 0), "right", bottom, move_index=0, spike_revival_moves=None)
+        s1 = _apply_move(state, (0, 0), "right", bottom)
         # Second fill: need another block.
         top_lists2 = [[M, E, E]]
         s2 = _state(top_lists2, qs=[((0, 1), 1)])  # pre-set count to 1
-        result = _apply_move(s2, (0, 0), "right", bottom, move_index=1, spike_revival_moves=None)
+        result = _apply_move(s2, (0, 0), "right", bottom)
         assert result is not None
         from app.solver.solver import _qs_count
         assert _qs_count(result.quicksand_counts, (0, 1)) == 2

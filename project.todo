@@ -17,8 +17,12 @@ Game Mechanics:
       Block types are tracked with an enum
       ☐ Define `ICE` block type and `Block` implementation
       ☐ Define `SPIKE` block type and `Block` implementation
+        - 5 independently spiked faces (UP + 4 sides; bottom excluded), configurable per block
+        - destroyed face-by-face by blocks with `can_destroy_spike`; consumes the block if `is_destroyed_by_spike`
+        - becomes movable once all faces are cleared; cells against a live face block Phil
+        - ground-level variant `SPIKE_FLOOR` (top face only); see python solver + .claude/game-mechanics.md
       ☐ Define `BOUNCE` block type and `Block` implementation
-      ☐ Define `MOVE_ONE` block type and `Block` implementation
+      ☐ Define `MOVE_ONE` block type and `Block` implementation (default `can_destroy_spike=true`, `is_destroyed_by_spike=true`)
       ☐ Define `STATIC` block type and `Block` implementation
     ☐ Consider defining game rules in a json file so that they can be consumed by python and js and used to apply game mechanics accross different contexts
   

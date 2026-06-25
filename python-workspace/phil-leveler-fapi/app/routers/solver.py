@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.models.level import BlockType
+from app.models.level import Cell
 from app.solver.solver import solve
 
 router = APIRouter(prefix="/solver", tags=["solver"])
@@ -21,36 +21,32 @@ router = APIRouter(prefix="/solver", tags=["solver"])
 class LevelSolveRequest(BaseModel):
     """Input model for the solve endpoint.
 
-    Both grids must have the same dimensions.  floor uses bottom-layer cell
-    types (EMPTY, STATIC, HOLE, QUICKSAND, ICE_FLOOR) and top uses top-layer
-    cell types (EMPTY, STATIC, PHIL, GOAL, MOVE_ONE, ICE, BOUNCE, SPIKE).
-    The top grid must contain exactly one PHIL cell and one GOAL cell.
+    Both grids must have the same dimensions.  Each cell is either a BlockType
+    string or a BlockSpec object (used to configure spike faces or a block's
+    can_destroy_spike / is_destroyed_by_spike behaviour).  floor uses
+    bottom-layer types (EMPTY, STATIC, HOLE, QUICKSAND, ICE_FLOOR, SPIKE_FLOOR)
+    and top uses top-layer types (EMPTY, STATIC, PHIL, GOAL, MOVE_ONE, ICE,
+    BOUNCE, SPIKE).  The top grid must contain exactly one PHIL and one GOAL.
 
     Attributes:
         floor: 2-D array representing the bottom (floor) layer.
         top: 2-D array representing the top (block) layer.
         max_depth: Maximum player moves to explore before declaring unsolvable.
             Raise for complex levels; lower for faster timeouts on simpler ones.
-        spike_revival_moves: Number of player moves after which a retracted
-            SPIKE revives.  Omit or pass null for spikes that never revive.
     """
 
-    floor: list[list[BlockType]] = Field(
-        description="2-D array of bottom-layer cell types."
+    floor: list[list[Cell]] = Field(
+        description="2-D array of bottom-layer cells (BlockType string or BlockSpec)."
     )
-    top: list[list[BlockType]] = Field(
-        description="2-D array of top-layer cell types. Must contain exactly one PHIL and one GOAL."
+    top: list[list[Cell]] = Field(
+        description="2-D array of top-layer cells (BlockType string or BlockSpec). "
+        "Must contain exactly one PHIL and one GOAL."
     )
     max_depth: int = Field(
         default=20,
         ge=1,
         le=100,
         description="Maximum player moves to explore (default 20).",
-    )
-    spike_revival_moves: Optional[int] = Field(
-        default=None,
-        ge=1,
-        description="Moves after which retracted spikes revive. Null means never.",
     )
 
 
@@ -102,7 +98,6 @@ def solve_level(request: LevelSolveRequest) -> SolveResult:
         floor_grid=request.floor,
         top_grid=request.top,
         max_depth=request.max_depth,
-        spike_revival_moves=request.spike_revival_moves,
     )
 
     if result["solvable"]:

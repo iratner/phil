@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import Annotated
 from pydantic import BaseModel, Field, ConfigDict
 
 
@@ -71,11 +70,24 @@ class BlockType(str, Enum):
     """
 
     SPIKE = "spike"
-    """Spike block — cannot be moved directly by the player.
-    Interaction: any top-layer block that slides into the cell occupied by a
-    SPIKE is destroyed; the spike then retracts (its cell becomes EMPTY).
-    The spike can optionally revive after a configurable number of player
-    moves (see solver parameter spike_revival_moves; None = never revives).
+    """Spike block — a cube with up to five independently spiked faces.
+
+    The five faces are UP, NORTH, SOUTH, EAST and WEST (the bottom face is
+    never spiked).  Which faces carry spikes is configurable per block via the
+    ``spiked_faces`` field of :class:`BlockSpec`; a bare ``"spike"`` cell
+    defaults to all five faces spiked.
+
+    Interaction: when a movable block whose ``can_destroy_spike`` flag is true
+    slides into one of the spiked faces, the spikes on *that face only* are
+    destroyed.  Whether the incoming block itself is consumed is governed by
+    its ``is_destroyed_by_spike`` flag.  A spike block cannot be pushed by the
+    player while any face still carries spikes; once *all* faces are clear it
+    becomes an ordinary movable (MOVE_ONE) block.
+
+    Passability: Phil cannot occupy a cell that sits directly against a spiked
+    face.  Destroying a face frees the cell adjacent to it.
+
+    Spikes never revive — destroyed faces stay destroyed for the level.
     """
 
     # ── Bottom layer only ─────────────────────────────────────────────────────
@@ -107,6 +119,71 @@ class BlockType(str, Enum):
     the same direction until they leave the ice surface or hit an obstacle.
     """
 
+    SPIKE_FLOOR = "spike_floor"
+    """Ground-level spike — a spike block embedded in the floor.
+
+    Only its top (UP) face is exposed and spiked.  Phil cannot stand on the
+    cell while the top face carries spikes, and a top-layer block cannot pass
+    over it.  A movable block with ``can_destroy_spike`` true that slides onto
+    the cell destroys the top face (subject to its ``is_destroyed_by_spike``
+    flag); once destroyed the cell behaves as plain EMPTY floor.  Shares the
+    spike mechanics of :class:`BlockType.SPIKE` but is restricted to the
+    bottom layer with a single face.
+    """
+
+
+class Face(str, Enum):
+    """The spiked faces of a SPIKE / SPIKE_FLOOR block (bottom face excluded).
+
+    Each value is its own JSON/string representation.  ``UP`` points out of the
+    board (it guards the block's own cell when the spike is ground-level); the
+    four cardinal faces guard the orthogonally-adjacent cell in their direction.
+    """
+
+    UP = "up"
+    NORTH = "north"
+    SOUTH = "south"
+    EAST = "east"
+    WEST = "west"
+
+
+class BlockSpec(BaseModel):
+    """A single cell that carries per-block properties beyond its type.
+
+    A board cell may be expressed either as a bare ``BlockType`` string (which
+    takes the type's default properties) or as this richer object when a level
+    needs to override face configuration or spike-interaction behaviour.
+
+    Unset (``None``) fields are resolved to type-appropriate defaults by the
+    solver:
+      - ``can_destroy_spike`` → true for movable blocks (MOVE_ONE / ICE),
+        false otherwise.
+      - ``is_destroyed_by_spike`` → true (a block that hits a live spike face
+        is consumed by default).
+      - ``spiked_faces`` → all five faces for SPIKE, the single UP face for
+        SPIKE_FLOOR, empty otherwise.
+    """
+
+    model_config = ConfigDict(use_enum_values=True)
+
+    type: BlockType = Field(description="The cell's block type.")
+    can_destroy_spike: bool | None = Field(
+        default=None,
+        description="If true, this block destroys a spike face it slides into.",
+    )
+    is_destroyed_by_spike: bool | None = Field(
+        default=None,
+        description="If true, this block is consumed when it hits a live spike face.",
+    )
+    spiked_faces: list[Face] | None = Field(
+        default=None,
+        description="Which faces carry spikes (SPIKE / SPIKE_FLOOR only).",
+    )
+
+
+# A board cell is either a bare BlockType string or a BlockSpec object.
+Cell = BlockType | BlockSpec
+
 
 class Level(BaseModel):
     model_config = ConfigDict(
@@ -123,7 +200,9 @@ class Level(BaseModel):
         description="User ID of the level creator",
         gt=0,  # Must be positive
     )
-    board_top: list[list[BlockType]] = Field(
-        default_factory=list, description="2D array representing the top board layout"
+    board_top: list[list[Cell]] = Field(
+        default_factory=list,
+        description="2D array representing the top board layout. Each cell is a "
+        "BlockType string or a BlockSpec object.",
     )
-    board_bottom: list[list[BlockType]] = Field(default_factory=list)
+    board_bottom: list[list[Cell]] = Field(default_factory=list)

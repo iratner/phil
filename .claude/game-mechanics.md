@@ -22,8 +22,12 @@ Claude when working on any code that touches game logic.
 
 | Layer  | Valid BlockType values |
 |--------|------------------------|
-| Bottom | `EMPTY`, `STATIC`, `HOLE`, `QUICKSAND`, `ICE_FLOOR` |
+| Bottom | `EMPTY`, `STATIC`, `HOLE`, `QUICKSAND`, `ICE_FLOOR`, `SPIKE_FLOOR` |
 | Top    | `EMPTY`, `STATIC`, `PHIL`, `GOAL`, `MOVE_ONE`, `ICE`, `BOUNCE`, `SPIKE` |
+
+A cell may be expressed either as a bare `BlockType` string or as a `BlockSpec`
+object (`{ type, can_destroy_spike?, is_destroyed_by_spike?, spiked_faces? }`)
+when it needs per-block overrides — see **Block Properties** and **SPIKE** below.
 
 ---
 
@@ -33,10 +37,13 @@ Claude when working on any code that touches game logic.
 * His starting position is the single `PHIL` cell in the top layer.
 * **Phil never moves** during gameplay.  The player moves blocks to create a
   path to the `GOAL` cell.
-* Phil can enter a cell if **both** conditions hold:
+* Phil can enter a cell if **all** conditions hold:
   1. The top-layer cell is `EMPTY`, `PHIL`, or `GOAL` (nothing blocking him).
   2. The bottom-layer cell is walkable: not `HOLE` (unless filled), not
-     `STATIC`, and not `QUICKSAND` with fewer than 2 blocks pushed in.
+     `STATIC`, not `QUICKSAND` with fewer than 2 blocks pushed in, and not an
+     intact `SPIKE_FLOOR`.
+  3. No live spike face of an adjacent `SPIKE` block points at the cell (see
+     **SPIKE**).
 * Phil moves orthogonally only (no diagonal).
 * Phil cannot jump over blocks on the top layer.
 
@@ -57,6 +64,20 @@ Only `MOVE_ONE` and `ICE` blocks can be pushed directly by the player.
 
 After a move resolves (including all secondary interactions), the board is
 checked for the win condition.
+
+### Block Properties
+
+Movable blocks carry two boolean properties that govern spike interactions.
+They are static (they travel with the block as it moves) and default per type:
+
+* `can_destroy_spike` — if true, the block destroys the spike face it slides
+  into.  **Defaults to `true` for all movable blocks** (`MOVE_ONE`, `ICE`),
+  `false` otherwise.
+* `is_destroyed_by_spike` — if true, the block is consumed when it strikes a
+  *live* spike face.  **Defaults to `true`.**
+
+Both can be overridden per cell via `BlockSpec`.  The solver respects every
+combination of these flags (see SPIKE).
 
 ---
 
@@ -105,15 +126,40 @@ Win target.  Treated as walkable for flood-fill purposes (Phil can "enter" it).
   hole fill, etc.) but does **not** chain another bumper interaction.
 
 ### SPIKE
-* **Cannot** be moved directly by the player.
-* Interaction: when any sliding top-layer block's path ends at a SPIKE cell,
-  both the sliding block **and** the spike are removed (spike retracts, cell
-  becomes `EMPTY`).
-* Revival: spikes can optionally return after a configurable number of player
-  moves (`spike_revival_moves` solver parameter).  Default is `None` (never
-  revives).  When revival is active, the solver tracks `(row, col,
-  destroyed_at_move)` tuples and restores the spike cell once the move-count
-  threshold is reached.
+A spike block is a cube with up to **five independently spiked faces**: `UP`,
+`NORTH`, `SOUTH`, `EAST`, `WEST` (the bottom face is never spiked).  Which faces
+carry spikes is configurable per block (`spiked_faces`); a bare `SPIKE` cell
+defaults to **all five faces** spiked.
+
+* **Cannot** be pushed by the player while *any* face still carries spikes.
+* **Faces and Phil's passability:** each cardinal face guards the neighbouring
+  cell in its direction — Phil cannot occupy a cell that sits against a live
+  face.  Phil can never enter the spike's own cell (it is a block).  The `UP`
+  face is the *top* of the cube: for a top-layer spike it guards nothing in
+  2-D, but for a ground-level spike (`SPIKE_FLOOR`) it makes the cell itself
+  non-walkable.
+* **Side-face collision / destruction:** when a movable block slides into a
+  top-layer spike it strikes the face *opposite* its motion (moving right
+  strikes the `WEST` face, etc.).  Resolution depends on the incoming block's
+  properties and the struck face:
+  * If the struck face is already clear, the spike acts as an ordinary wall —
+    the block stops before it.
+  * Else if `can_destroy_spike` is true, that **one face** loses its spikes.
+  * The incoming block is then consumed if `is_destroyed_by_spike` is true;
+    otherwise it survives and stops in the cell immediately before the spike.
+  * If the block can neither destroy the face nor be destroyed by it, the
+    spike is a wall (block stops before it; a no-move push is illegal).
+* **Top-face (`UP`) destruction:** the top face is destroyable when the spike
+  is **ground-level** (`SPIKE_FLOOR`).  A block with `can_destroy_spike` that
+  slides **onto** the cell destroys the top face (then is consumed, or lands on
+  the now-flat cell, per `is_destroyed_by_spike`).  See `SPIKE_FLOOR` in the
+  floor types below.
+* **Becoming movable:** once **all** faces are cleared, a top-layer spike turns
+  into an ordinary `MOVE_ONE` block (with default movable properties) and can
+  be pushed.  (A default all-faces top-layer spike keeps its undestroyable `UP`
+  face, so it never auto-converts; author `spiked_faces` without `UP` for
+  spikes meant to be cleared.)
+* **No revival** — destroyed faces stay destroyed for the rest of the level.
 
 ---
 
@@ -151,6 +197,21 @@ slide through it (acts as a wall for block movement).
   * Reach a non-ice bottom cell (they land there).
   * Reach an unfilled `HOLE` or `QUICKSAND` (they fall through at that point).
 
+### SPIKE_FLOOR (Ground-Level Spike)
+A spike embedded in the floor, exposing only its top (`UP`) face.
+
+* Phil **cannot** stand on the cell while the top face carries spikes.
+* A top-layer block cannot pass over it while intact — it collides with the top
+  face on arrival (the same way a side-face collision works for a `SPIKE`):
+  * A block with `can_destroy_spike` true destroys the top face; the block is
+    then consumed if `is_destroyed_by_spike` is true, otherwise it lands on the
+    now-flat cell.
+  * A block that cannot destroy the face is consumed (if `is_destroyed_by_spike`)
+    or stops in the cell before it.
+* Once the top face is destroyed the cell behaves as plain `EMPTY` floor
+  (walkable by Phil, slid over by blocks).  Tracked in solver state as
+  `floor_spikes_destroyed`.
+
 ---
 
 ## Ice Sliding — Detailed Rules
@@ -182,14 +243,18 @@ Algorithm (`compute_destination`):
 * **What the solver computes**: minimum number of *player* moves to reach the
   win condition (path from PHIL to GOAL exists).
 * **Algorithm**: BFS over `GameState` tuples; each BFS level = one player move.
-* **State representation** (`GameState` NamedTuple):
-  * `top` — immutable 2D tuple of current top-layer cell types.
+* **State representation** (`GameState`):
+  * `top` — immutable 2D tuple of `Cell` values.  Each `Cell` carries its
+    `type`, the movable properties `can_destroy_spike` / `is_destroyed_by_spike`,
+    and `spiked_faces` (the faces a `SPIKE` still has).  Properties travel with
+    the block as it moves; a fully de-spiked `SPIKE` becomes a `MOVE_ONE` cell.
   * `holes_filled` — frozenset of `(row, col)` positions where holes have been
     filled by non-ice blocks (now walkable as solid floor).
   * `ice_holes_filled` — frozenset of `(row, col)` positions where holes have
     been filled by ICE blocks (walkable but slippery).
   * `quicksand_counts` — sorted tuple of `((row, col), fill_count)` pairs.
-  * `destroyed_spikes` — tuple of `(row, col, destroyed_at_move)` triples.
+  * `floor_spikes_destroyed` — frozenset of `(row, col)` `SPIKE_FLOOR` cells
+    whose top face has been destroyed (now plain floor).
 * **Scoring is not computed by the solver** — points and multipliers are live
   game mechanics only.
 * **Depth limit**: configurable `max_depth` (default 20 moves) bounds the BFS
