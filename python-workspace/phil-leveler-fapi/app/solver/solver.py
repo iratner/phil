@@ -84,19 +84,27 @@ class Cell(NamedTuple):
         spiked_faces: The faces that still carry spikes.  Non-empty only while
             ``type`` is SPIKE; a SPIKE whose faces are all cleared is converted
             to a MOVE_ONE cell.
+        capacity: For a QUICKSAND floor cell, how many top-layer blocks must
+            sink before it becomes walkable.  Meaningful only on the bottom
+            layer; carried here so floor cells share the same config-bearing
+            representation as top-layer cells.  Defaults to 2.
     """
 
     type: BlockType
     can_destroy_spike: bool = False
     is_destroyed_by_spike: bool = False
     spiked_faces: frozenset[Face] = frozenset()
+    capacity: int = 2
 
 
 # An immutable 2-D grid of Cell values (top layer).
 TopGrid = tuple[tuple[Cell, ...], ...]
 
-# An immutable 2-D grid of BlockType values (bottom layer; never changes).
-BottomGrid = tuple[tuple[BlockType, ...], ...]
+# An immutable 2-D grid of Cell values (bottom layer).  The bottom layer never
+# changes during play, but each cell carries its own static config (e.g. a
+# QUICKSAND cell's ``capacity``), so it uses the same Cell representation as the
+# top layer rather than a bare BlockType.
+BottomGrid = tuple[tuple[Cell, ...], ...]
 
 # Quicksand fill tracker: sorted tuple of ((row, col), fill_count) pairs.
 QuicksandCounts = tuple[tuple[Pos, int], ...]
@@ -122,6 +130,8 @@ def _to_cell(value: RawCell) -> Cell:
       - ``is_destroyed_by_spike`` defaults to true.
       - ``spiked_faces`` defaults to all five faces for SPIKE, else empty.
         (SPIKE_FLOOR lives on the bottom layer and is not represented here.)
+      - ``capacity`` defaults to 2 (the QUICKSAND fill threshold); the default
+        is uniform across types so equivalent cells compare equal for hashing.
     """
     if isinstance(value, Cell):
         return value
@@ -135,11 +145,13 @@ def _to_cell(value: RawCell) -> Cell:
             if value.spiked_faces is not None
             else None
         )
+        capacity = value.capacity
     else:
         btype = BlockType(value)
         can_destroy = None
         is_destroyed = None
         faces = None
+        capacity = None
 
     if can_destroy is None:
         can_destroy = btype in MOVABLE_TYPES
@@ -147,12 +159,15 @@ def _to_cell(value: RawCell) -> Cell:
         is_destroyed = True
     if faces is None:
         faces = ALL_FACES if btype == BlockType.SPIKE else frozenset()
+    if capacity is None:
+        capacity = 2
 
     return Cell(
         type=btype,
         can_destroy_spike=can_destroy,
         is_destroyed_by_spike=is_destroyed,
         spiked_faces=faces,
+        capacity=capacity,
     )
 
 
@@ -252,19 +267,16 @@ def _top_grid_to_lists(grid: TopGrid) -> list[list[Cell]]:
     return [list(row) for row in grid]
 
 
-def _bottom_grid_from_lists(rows: list[list[RawCell]]) -> BottomGrid:
-    """Convert a mutable 2-D floor list into an immutable BlockType grid.
+def _bottom_grid_from_lists(rows: Sequence[Sequence[RawCell]]) -> BottomGrid:
+    """Convert a mutable 2-D floor list into an immutable Cell grid.
 
-    The bottom layer carries no per-cell properties, so each cell is reduced to
-    its bare BlockType (a BlockSpec floor cell contributes only its ``type``).
+    Floor cells carry their own static per-cell config (e.g. a QUICKSAND cell's
+    ``capacity``), so each raw cell is normalised through :func:`_to_cell` just
+    like the top layer — nothing is discarded.  The grid is still immutable and
+    never mutated during play; it simply travels alongside the mutable
+    :class:`GameState`.
     """
-    return tuple(
-        tuple(
-            BlockType(cell.type) if isinstance(cell, BlockSpec) else BlockType(cell)
-            for cell in row
-        )
-        for row in rows
-    )
+    return tuple(tuple(_to_cell(cell) for cell in row) for row in rows)
 
 
 def _in_bounds(grid: tuple, row: int, col: int) -> bool:
@@ -316,19 +328,20 @@ def _effective_floor(
     Effective floor rules (in priority order):
     1. HOLE in holes_filled → EMPTY.
     2. HOLE in ice_holes_filled → ICE_FLOOR.
-    3. QUICKSAND with fill count >= 2 → EMPTY.
+    3. QUICKSAND with fill count >= the cell's capacity → EMPTY.
     4. SPIKE_FLOOR in floor_spikes_destroyed → EMPTY.
     5. Otherwise the original bottom-layer value.
     """
     pos = (row, col)
-    original = bottom[row][col]
+    cell = bottom[row][col]
+    original = cell.type
     if original == BlockType.HOLE:
         if pos in holes_filled:
             return BlockType.EMPTY
         if pos in ice_holes_filled:
             return BlockType.ICE_FLOOR
     if original == BlockType.QUICKSAND:
-        if _qs_count(quicksand_counts, pos) >= 2:
+        if _qs_count(quicksand_counts, pos) >= cell.capacity:
             return BlockType.EMPTY
     if original == BlockType.SPIKE_FLOOR:
         if pos in floor_spikes_destroyed:
@@ -571,7 +584,7 @@ def _apply_move(
     top_lists[block_row][block_col] = _EMPTY_CELL
 
     if dest_kind == "FALL":
-        original_floor = bottom[dest_row][dest_col]
+        original_floor = bottom[dest_row][dest_col].type
         if original_floor == BlockType.HOLE:
             if block_cell.type == BlockType.ICE:
                 ice_holes_filled = ice_holes_filled | {(dest_row, dest_col)}
@@ -848,7 +861,8 @@ def solve(
     Args:
         floor_grid: 2-D list of bottom-layer cells.  Each cell is a BlockType
             (EMPTY, STATIC, HOLE, QUICKSAND, ICE_FLOOR, SPIKE_FLOOR) or a
-            BlockSpec; floor cells use only their type.
+            BlockSpec.  Floor cells carry their own static config — e.g. a
+            QUICKSAND cell's ``capacity`` (default 2).
         top_grid: 2-D list of top-layer cells (BlockType or BlockSpec).  Valid
             types: EMPTY, STATIC, PHIL, GOAL, MOVE_ONE, ICE, BOUNCE, SPIKE.
             Must contain exactly one PHIL and one GOAL cell.

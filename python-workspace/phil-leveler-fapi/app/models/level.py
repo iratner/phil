@@ -104,10 +104,13 @@ class BlockType(str, Enum):
 
     QUICKSAND = "quicksand"
     """Quicksand pit on the bottom layer.
-    Phil cannot cross until exactly 2 top-layer blocks have fallen into it.
+    Phil cannot cross until enough top-layer blocks have fallen into it.  The
+    number required is the cell's ``capacity`` (see :class:`BlockSpec`); a bare
+    ``"quicksand"`` cell defaults to 2.
     Each falling block increments the fill count tracked in solver state.
-    At fill count >= 2 the cell becomes walkable (treated as EMPTY floor).
-    Blocks continue to be consumed until the threshold is reached.
+    Once the fill count reaches the cell's capacity it becomes walkable (treated
+    as EMPTY floor).  Blocks continue to be consumed until the threshold is
+    reached.
     """
 
     ICE_FLOOR = "ice_floor"
@@ -162,6 +165,13 @@ class BlockSpec(BaseModel):
         is consumed by default).
       - ``spiked_faces`` → all five faces for SPIKE, the single UP face for
         SPIKE_FLOOR, empty otherwise.
+      - ``capacity`` → 2 (the number of blocks a QUICKSAND cell must swallow
+        before it becomes walkable).
+
+    This model is layer-agnostic: it configures both top-layer blocks and
+    floor cells, so a floor cell can carry per-block config too (e.g. a
+    QUICKSAND cell's ``capacity``).  Which fields are meaningful depends on the
+    ``type``, exactly as ``spiked_faces`` is meaningful only for spikes.
     """
 
     model_config = ConfigDict(use_enum_values=True)
@@ -178,6 +188,12 @@ class BlockSpec(BaseModel):
     spiked_faces: list[Face] | None = Field(
         default=None,
         description="Which faces carry spikes (SPIKE / SPIKE_FLOOR only).",
+    )
+    capacity: int | None = Field(
+        default=None,
+        ge=1,
+        description="For QUICKSAND: how many top-layer blocks must sink before "
+        "the cell becomes walkable (defaults to 2). Ignored by other types.",
     )
 
 

@@ -51,6 +51,11 @@ def _spike(*faces):
     return BlockSpec(type=BlockType.SPIKE, spiked_faces=list(faces))
 
 
+def _quicksand(capacity):
+    """Build a QUICKSAND floor BlockSpec requiring *capacity* blocks to fill."""
+    return BlockSpec(type=BlockType.QUICKSAND, capacity=capacity)
+
+
 # ---------------------------------------------------------------------------
 # Board helpers
 # ---------------------------------------------------------------------------
@@ -642,7 +647,8 @@ class TestBounceBlock:
 
 
 class TestQuicksand:
-    """QUICKSAND requires 2 blocks to fall in before Phil can cross."""
+    """QUICKSAND requires ``capacity`` blocks to fall in before Phil can cross
+    (default 2, configurable per cell via BlockSpec.capacity)."""
 
     def test_first_block_does_not_open_quicksand(self):
         """After 1 block falls into QUICKSAND the cell is still impassable."""
@@ -693,6 +699,54 @@ class TestQuicksand:
         floor = [[S, E, S], [S, Q, S], [S, E, S]]
         top   = [[E, P, E], [M, E, M], [E, G, E]]
         _assert_solve(floor, top, expected_moves=2, max_depth=5)
+
+    def test_capacity_one_opens_after_single_block(self):
+        """A capacity-1 QUICKSAND becomes walkable after just one block falls."""
+        floor_lists = [[E, _quicksand(1), E]]
+        bottom = _bottom(floor_lists)
+        state = _state([[M, E, E]])
+        result = _apply_move(state, (0, 0), "right", bottom)
+        assert result is not None
+        from app.solver.solver import _qs_count
+        assert _qs_count(result.quicksand_counts, (0, 1)) == 1
+        effective = _effective_floor(
+            0, 1, bottom, result.holes_filled, result.ice_holes_filled,
+            result.quicksand_counts,
+        )
+        assert _is_phil_walkable(0, 1, BlockType.EMPTY, effective)
+
+    def test_capacity_three_requires_three_blocks(self):
+        """A capacity-3 QUICKSAND stays closed at 2 fills and opens at 3."""
+        floor_lists = [[E, _quicksand(3), E]]
+        bottom = _bottom(floor_lists)
+
+        two = _state([[E, E, E]], qs=[((0, 1), 2)])
+        eff2 = _effective_floor(
+            0, 1, bottom, two.holes_filled, two.ice_holes_filled,
+            two.quicksand_counts,
+        )
+        assert not _is_phil_walkable(0, 1, BlockType.EMPTY, eff2)
+
+        three = _state([[E, E, E]], qs=[((0, 1), 3)])
+        eff3 = _effective_floor(
+            0, 1, bottom, three.holes_filled, three.ice_holes_filled,
+            three.quicksand_counts,
+        )
+        assert _is_phil_walkable(0, 1, BlockType.EMPTY, eff3)
+
+    def test_capacity_one_solves_in_one_move(self):
+        """A capacity-1 QUICKSAND lets a single push open Phil's path.
+
+        Same corridor as the two-move default case, but capacity 1 means one
+        falling block is enough — the solver should find a 1-move solution.
+
+        floor:  S E  S       top:  E P E
+                S Q1 S             M . .   ← single M beside the quicksand
+                S E  S             E G E
+        """
+        floor = [[S, E, S], [S, _quicksand(1), S], [S, E, S]]
+        top   = [[E, P, E], [M, E, E], [E, G, E]]
+        _assert_solve(floor, top, expected_moves=1, max_depth=5)
 
 
 # ===========================================================================
