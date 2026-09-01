@@ -1,6 +1,7 @@
 # Phil Game Rules
 
 ## The Board
+
 1. The board consists of 2 levels of blocks
 2. The bottom level of blocks is composed of holes and blocks
 3. The top level of blocks is composed of various blocks that can be moved, and some that cannot be moved
@@ -10,68 +11,86 @@
 7. The first level should only be made of empty spaces, [Immovable Blocks](#immovable-iron) and [Ice Blocks](#ice)
 
 ## Phil (The main character)
+
 1. Phil is a little spherical fellow that needs to reach a glowing sphere on the board.
 2. Phil hangs out on the second level
 3. Phil can only step on the bottom level blocks that are not holes, and do not have a property that prevents Phil from stepping on them
 4. Phil cannot jump over blocks on the same level as him (the second level)
-5. Phil doesn't move during the course of the game.  He waits for a path to be created
+5. Phil doesn't move during the course of the game. He waits for a path to be created
 
 ## Gameplay
+
 1. The player moves the top level blocks to create a path for Phil
-2. The path needs to reach a __GOAL__: A glowing sphere 
+2. The path needs to reach a **GOAL**: A glowing sphere
 3. each time a block is interacted with, and it reaches it's final destination, the game board is updated by visually displaying all the blocks Phil can reach
-4. The player moves the blocks with either a touch interaction, or a mouse interaction.  A touch would be a slide in the direction the block needs to move.  A mouse would be a click on the block, and click on the direction, or a mouse down and slide similar to the touch interaction
+4. The player moves the blocks with either a touch interaction, or a mouse interaction. A touch would be a slide in the direction the block needs to move. A mouse would be a click on the block, and click on the direction, or a mouse down and slide similar to the touch interaction
 5. Each time the player makes a move they receive points for that move
-6. __WIN CONDITION__ when a path is available for Phil to travel across to reach the __GOAL__, the level has been completed
-  
+6. **WIN CONDITION** when a path is available for Phil to travel across to reach the **GOAL**, the level has been completed
+
 ### Move Types
+
 1. regular move - 50 points
 2. special move - 100 points
 3. move that fills a hole - 300 points
 
-Moves of type 1 and 2 are mutually exclusive.  A move of type 3 is additive.  
+Moves of type 1 and 2 are mutually exclusive. A move of type 3 is additive.
 
-### The Bonus Multiplier 
+### The Bonus Multiplier
 
 #### Time Bar
 
-At the top of the game screen there is a shrinking time bar that takes 5 seconds to go down to zero.  It resets as soon as a the player completes another move, but before the block reaches it's final destination.  Each time the player makes a move before the time runs out, a multiplier is added to the player's game state.  Multipliers are cumulative.  They add x2 each consecutive a the move is made before the time runs out.  Each time a player makes a move, the multiplier is used to increase the score for that move.  The first time a move is not made before the multiplier time bar runs out, the multiplier resets to x1
+At the top of the game screen there is a shrinking time bar that takes 5 seconds to go down to zero. It resets as soon as a the player completes another move, but before the block reaches it's final destination. Each time the player makes a move before the time runs out, a multiplier is added to the player's game state. Multipliers are cumulative. They add x2 each consecutive a the move is made before the time runs out. Each time a player makes a move, the multiplier is used to increase the score for that move. The first time a move is not made before the multiplier time bar runs out, the multiplier resets to x1
 
 #### Multiplier Cube
 
-The number of consectutive multpliers is tracked by a 3 faced cube.  Each face is subdivided into 4 sections.  This is a 2d representation of a cube, but only three of the faces are visible.  Each time a multipler is applied one section of the game cube changes color.  Once all 12 sections have lit up, the multiplier timer is reduced to 4 seconds (or some other constant TBD), making it harder to keep it active.
-
+The number of consectutive multpliers is tracked by a 3 faced cube. Each face is subdivided into 4 sections. This is a 2d representation of a cube, but only three of the faces are visible. Each time a multipler is applied one section of the game cube changes color. Once all 12 sections have lit up, the multiplier timer is reduced to 4 seconds (or some other constant TBD), making it harder to keep it active.
 
 ### Block Types
 
 #### Property Defintions
+
 1. immovable - nothing can move this block
 2. player non-movable - player cannot move this block, but game intreactions might
 
 #### Blocks
 
-##### Immovable (iron) 
-* blocks that cannot be moved
-   
+##### Immovable (iron)
+
+- blocks that cannot be moved
+
 ##### Stone
-* blocks that move exactly on space
-  
-##### Ice 
-* blocks that move one space
-* When they fall into a hole on the first level, other blocks that are moved onto them keep sliding in the same direction
 
-##### Bumper 
-* stationary blocks.  
-* When a block is moved into a cell that is adjacent to them, if another block sits on the opposite side, and on same travel axis, that block gets bumped into the next cell
+- blocks that move exactly on space
 
-##### Spike  
-* a spiked block that cannot be move by the game player directly
-* when other blocks slide into it they are destroyed, and the spikes retract
-    * (idea) - maybe they come back later, not sure yet.  Coundown can be signalled with color/number/something else
+##### Ice
+
+- blocks that move one space
+- When they fall into a hole on the first level, other blocks that are moved onto them keep sliding in the same direction
+
+##### Bumper
+
+- stationary blocks.
+- When a block is moved into a cell that is adjacent to them, if another block sits on the opposite side, and on same travel axis, that block gets bumped into the next cell
+
+##### Spike
+
+- a cube with up to 5 independently spiked faces: top (`UP`) plus the 4 sides
+  (`NORTH`/`SOUTH`/`EAST`/`WEST`); the bottom face is never spiked. Which faces
+  are spiked is configurable per block (default: all 5)
+- cannot be pushed by the player while any face still has spikes
+- Phil cannot stand in a cell that sits against a spiked face
+- when a block with `can_destroy_spike = true` slides into a face, the spikes on
+  **that one face** are destroyed. Whether the incoming block is also destroyed
+  is set by its `is_destroyed_by_spike` property (default `true`)
+  - all movable blocks have `can_destroy_spike = true` to start
+- once every face has been cleared the spike becomes an ordinary movable block
+- spikes do **not** come back — destroyed faces stay destroyed
+- a spike can sit on the ground (bottom layer) as a `SPIKE_FLOOR`: only its top
+  face is exposed and spiked. Phil can't cross it; a `can_destroy_spike` block
+  that slides onto it destroys the top face, after which it's normal floor
 
 ##### Quick Sand
-* cannot be crossed by
-* lives on the bottom layer
-* requires two blocks to be pushed in for it to become crossable
 
- 
+- cannot be crossed by
+- lives on the bottom layer
+- requires two blocks to be pushed in for it to become crossable
