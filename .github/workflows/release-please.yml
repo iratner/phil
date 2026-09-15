@@ -1,8 +1,16 @@
 name: Release Please
 
 on:
-  # Manual trigger while getting started. When ready to go automatic, see
-  # the migration note at the bottom of this file.
+  push:
+    branches:
+      - main
+    paths:
+      - 'node-workspace/**'
+      - 'python-workspace/**'
+      - 'release-please-config.json'
+      - '.release-please-manifest.json'
+
+  # Escape hatch for manual re-runs.
   workflow_dispatch:
 
 permissions:
@@ -28,7 +36,7 @@ jobs:
       #
       # Required repo secrets:
       #   RELEASE_PLEASE_APP_ID          — numeric App ID
-      #   RELEASE_PLEASE_APP_PRIVATE_KEY — full contents of the App's .pem private key
+      #   RELEASE_PLEASE_PRIVATE_KEY      — full contents of the App's .pem private key
       #
       # The App must be installed on this repo with these repository permissions:
       #   Contents: read & write      (push version-bump commit + tags)
@@ -54,22 +62,3 @@ jobs:
       # the push is attributed to the GitHub App, not GITHUB_TOKEN). That
       # workflow is now the home for build/deploy/notify steps — keep the
       # division of labor clean by NOT adding post-release steps here.
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MIGRATION: When ready to release automatically on every merge to main
-# that touches next-app-level-editor/ or phil-game/, replace the `on:` block above with:
-#
-# on:
-#   push:
-#     branches:
-#       - main
-#     paths:
-#       - 'next-app-level-editor/**'
-#       - 'phil-game/**'
-#       - 'release-please-config.json'
-#       - '.release-please-manifest.json'
-#   workflow_dispatch:  # keep as an escape hatch for manual re-runs
-#
-# After enabling this, release-please will open/update a Release PR automatically.
-# The actual GitHub Release is only created when that Release PR is merged.
-# ─────────────────────────────────────────────────────────────────────────────

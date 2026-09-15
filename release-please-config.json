@@ -1,23 +1,45 @@
 {
   "packages": {
-    "phil-game": {
+    "node-workspace/frontend/phil-game": {
       "changelog-path": "CHANGELOG.md",
-      "release-type": "simple",
+      "release-type": "node",
       "bump-minor-pre-major": false,
       "bump-patch-for-minor-pre-major": false,
       "draft": false,
       "prerelease": false,
       "package-name": "phil-game"
     },
-    "level-editor": {
+    "node-workspace/frontend/level-editor": {
       "changelog-path": "CHANGELOG.md",
-      "release-type": "simple",
+      "release-type": "node",
       "bump-minor-pre-major": false,
       "bump-patch-for-minor-pre-major": false,
       "draft": false,
       "prerelease": false,
       "package-name": "level-editor"
+    },
+    "node-workspace/phil-server-nest": {
+      "changelog-path": "CHANGELOG.md",
+      "release-type": "node",
+      "bootstrap-sha": "2d3ef447c737580f73baa21e64dd98804ee8be46",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "draft": false,
+      "prerelease": false,
+      "package-name": "phil-server-nest"
+    },
+    "python-workspace/phil-leveler-fapi": {
+      "changelog-path": "CHANGELOG.md",
+      "release-type": "python",
+      "extra-files": ["app/__init__.py"],
+      "bootstrap-sha": "2d3ef447c737580f73baa21e64dd98804ee8be46",
+      "bump-minor-pre-major": false,
+      "bump-patch-for-minor-pre-major": false,
+      "draft": false,
+      "prerelease": false,
+      "package-name": "phil-leveler-fapi"
     }
   },
+  "separate-pull-requests": false,
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json"
 }

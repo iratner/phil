@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from . import __version__
 from .routers import levels, solver
 
-app = FastAPI()
+app = FastAPI(title="Phil Leveler", version=__version__)
 
 origins = [
     "http://localhost:3003",
