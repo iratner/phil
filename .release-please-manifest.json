@@ -1,4 +1,6 @@
 {
-  "phil-game": "1.5.0",
-  "level-editor": "1.5.0"
+  "node-workspace/frontend/phil-game": "1.6.0",
+  "node-workspace/frontend/level-editor": "1.5.0",
+  "node-workspace/phil-server-nest": "0.0.1",
+  "python-workspace/phil-leveler-fapi": "1.0.0"
 }

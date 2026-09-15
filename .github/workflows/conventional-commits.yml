@@ -5,14 +5,14 @@ name: Enforce Conventional Commits
 #
 # Why exactly one commit:
 #   The repo squash setting `squash_merge_commit_title = COMMIT_OR_PR_TITLE`
-#   uses the single source commit's subject as the master commit subject — but
+#   uses the single source commit's subject as the squash commit subject — but
 #   only when the PR has exactly one commit. With 2+ commits, GitHub falls back
 #   to the PR title, which we deliberately do not validate. Rejecting
-#   multi-commit PRs keeps the master subject sourced from a validated commit,
+#   multi-commit PRs keeps the squash subject sourced from a validated commit,
 #   which is what release-please reads to compute the version bump.
 #
 # To fix a failing PR: squash locally and force-push.
-#   git rebase -i master    # mark all but the first commit as `squash`
+#   git rebase -i main    # mark all but the first commit as `squash`
 #   git push --force-with-lease
 #
 # This workflow runs on every PR to `main` (no `paths:` filter on the trigger)
@@ -50,7 +50,7 @@ jobs:
 
           # Paths whose changes require a single conventional commit.
           # Keep in sync with the release-please scopes.
-          WATCHED='^(phil-game|next-app-level-editor)/'
+          WATCHED='^(node-workspace/frontend/(phil-game|level-editor)|node-workspace/phil-server-nest|python-workspace/phil-leveler-fapi)/'
 
           if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -qE "$WATCHED"; then
             echo "Watched paths touched — will run validation."
@@ -82,13 +82,13 @@ jobs:
           if [ "$count" -ne 1 ]; then
             echo "::error::PR has $count non-merge commits; this repo requires exactly one."
             echo
-            echo "The master commit subject is sourced from the single source commit"
+            echo "The squash commit subject is sourced from the single source commit"
             echo "(repo setting: squash_merge_commit_title=COMMIT_OR_PR_TITLE). With 2+"
             echo "commits, GitHub falls back to the PR title, which this check does not"
-            echo "validate — so an unvalidated subject could leak onto master."
+            echo "validate — so an unvalidated subject could leak onto main."
             echo
             echo "Squash locally and force-push:"
-            echo "  git rebase -i master    # mark all but the first commit as 'squash'"
+            echo "  git rebase -i main    # mark all but the first commit as 'squash'"
             echo "  git push --force-with-lease"
             exit 1
           fi
